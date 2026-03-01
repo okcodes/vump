@@ -26,7 +26,9 @@ var (
 )
 
 // Execute is the entry point called from main.
-func Execute() {
+// version is the value injected at build time via ldflags.
+func Execute(version string) {
+	rootCmd.Version = version
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 		os.Exit(1)
