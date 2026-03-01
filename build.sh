@@ -47,6 +47,8 @@ for target in "${TARGETS[@]}"; do
 
   docker run --rm \
     -v "$SCRIPT_DIR":/src \
+    -v vump-mod-cache:/go/pkg/mod \
+    -v vump-build-cache:/root/.cache/go-build \
     -w /src \
     -e GOOS="$GOOS" \
     -e GOARCH="$GOARCH" \
