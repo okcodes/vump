@@ -2,7 +2,6 @@ package version
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,7 +9,7 @@ import (
 )
 
 // WriteVersion writes the new semver string to the given file,
-// preserving the file's existing formatting as much as possible.
+// preserving the file's existing formatting exactly (key order, whitespace, etc).
 func WriteVersion(path, newVersion string) error {
 	base := filepath.Base(path)
 	ft, err := DetectType(base)
@@ -41,33 +40,22 @@ func WriteVersion(path, newVersion string) error {
 	return os.WriteFile(path, newData, 0644)
 }
 
-// writePackageJSON preserves JSON key ordering by doing a structured
-// unmarshal → mutate → marshal with 2-space indent.
-func writePackageJSON(data []byte, newVersion, path string) ([]byte, error) {
-	// Use ordered map via json.RawMessage to preserve all fields.
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", path, err)
-	}
-	vBytes, err := json.Marshal(newVersion)
-	if err != nil {
-		return nil, err
-	}
-	raw["version"] = vBytes
+// packageVersionRe matches the "version": "..." field at any indentation level.
+var packageVersionRe = regexp.MustCompile(`"version"\s*:\s*"[^"]*"`)
 
-	out, err := json.MarshalIndent(raw, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("marshalling %s: %w", path, err)
+// writePackageJSON replaces only the version value via regex, preserving all
+// other formatting, key order, and whitespace exactly as-is.
+func writePackageJSON(data []byte, newVersion, path string) ([]byte, error) {
+	replacement := fmt.Sprintf(`"version": "%s"`, newVersion)
+	result := packageVersionRe.ReplaceAll(data, []byte(replacement))
+	if bytes.Equal(result, data) {
+		return nil, fmt.Errorf("%s: could not find \"version\" field to update", path)
 	}
-	// json.MarshalIndent does not guarantee field order identical to input,
-	// but preserves all keys. Append trailing newline.
-	out = append(out, '\n')
-	return out, nil
+	return result, nil
 }
 
 // writeCargoToml uses regex replacement so the rest of the TOML is untouched.
-// Matches the `version = "..."` line inside [package] by finding the first
-// occurrence of version = "..." in the file (Cargo convention: [package] first).
+// Matches the first `version = "..."` line (Cargo convention: [package] first).
 var cargoVersionRe = regexp.MustCompile(`(?m)^version\s*=\s*"[^"]*"`)
 
 func writeCargoToml(data []byte, newVersion, path string) ([]byte, error) {

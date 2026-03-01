@@ -3,6 +3,7 @@ package version_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/x/vump/internal/version"
@@ -38,17 +39,19 @@ func TestDetectType_Unknown(t *testing.T) {
 	}
 }
 
-// ─── ReadVersion / WriteVersion round-trips ───────────────────────────────────
+// ─── package.json: key order preserved ───────────────────────────────────────
 
 func TestPackageJSONRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "package.json")
 
-	// Write initial content with extra fields to ensure they're preserved.
+	// Keys are intentionally non-alphabetical to prove order is preserved.
 	initial := `{
   "name": "my-app",
   "version": "1.0.0",
-  "scripts": {}
+  "scripts": { "dev": "vite" },
+  "dependencies": { "react": "^19.0.0" },
+  "devDependencies": {}
 }
 `
 	if err := os.WriteFile(path, []byte(initial), 0644); err != nil {
@@ -61,17 +64,30 @@ func TestPackageJSONRoundTrip(t *testing.T) {
 		t.Fatalf("ReadVersion: want 1.0.0, got %q, err %v", got, err)
 	}
 
-	// Write.
+	// Write new version.
 	if err := version.WriteVersion(path, "2.0.0-beta.1"); err != nil {
 		t.Fatalf("WriteVersion: %v", err)
 	}
 
-	// Read back.
-	got2, err := version.ReadVersion(path)
-	if err != nil || got2 != "2.0.0-beta.1" {
-		t.Errorf("after write: want 2.0.0-beta.1, got %q, err %v", got2, err)
+	data, _ := os.ReadFile(path)
+	content := string(data)
+
+	// Version field must be updated.
+	if !strings.Contains(content, `"version": "2.0.0-beta.1"`) {
+		t.Errorf("version not updated:\n%s", content)
+	}
+
+	// Key order must be preserved: name → version → scripts → dependencies.
+	nameIdx := strings.Index(content, `"name"`)
+	versionIdx := strings.Index(content, `"version"`)
+	scriptsIdx := strings.Index(content, `"scripts"`)
+	depsIdx := strings.Index(content, `"dependencies"`)
+	if !(nameIdx < versionIdx && versionIdx < scriptsIdx && scriptsIdx < depsIdx) {
+		t.Errorf("key order not preserved:\n%s", content)
 	}
 }
+
+// ─── Cargo.toml round-trip ────────────────────────────────────────────────────
 
 func TestCargoTomlRoundTrip(t *testing.T) {
 	dir := t.TempDir()
@@ -102,10 +118,13 @@ edition = "2021"
 
 	// Ensure other fields were preserved.
 	data, _ := os.ReadFile(path)
-	if !containsAll(string(data), `name = "my-crate"`, `edition = "2021"`) {
-		t.Errorf("Cargo.toml fields lost after write:\n%s", data)
+	content := string(data)
+	if !strings.Contains(content, `name = "my-crate"`) || !strings.Contains(content, `edition = "2021"`) {
+		t.Errorf("Cargo.toml fields lost after write:\n%s", content)
 	}
 }
+
+// ─── VERSION round-trip ───────────────────────────────────────────────────────
 
 func TestVERSIONRoundTrip(t *testing.T) {
 	dir := t.TempDir()
@@ -130,6 +149,8 @@ func TestVERSIONRoundTrip(t *testing.T) {
 	}
 }
 
+// ─── Error cases ──────────────────────────────────────────────────────────────
+
 func TestReadVersion_MissingVersionField(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "package.json")
@@ -148,20 +169,4 @@ func TestReadVersion_EmptyVERSION(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for empty VERSION file")
 	}
-}
-
-func containsAll(s string, subs ...string) bool {
-	for _, sub := range subs {
-		found := false
-		for i := 0; i <= len(s)-len(sub); i++ {
-			if s[i:i+len(sub)] == sub {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-	return true
 }
