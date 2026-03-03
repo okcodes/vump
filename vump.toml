@@ -6,7 +6,7 @@
 [git]
 commit = true
 commit_message = "chore: bump version to v{new_version}"
-tag = false
+tag = true
 tag_pattern = "v{new_version}"
 push = false
 
