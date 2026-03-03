@@ -147,9 +147,45 @@ func run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Confirm (only in fully interactive mode).
+	// In fully interactive mode: ask git action, check dirty tree, then confirm.
 	if len(args) == 0 {
-		confirmed, err := ui.Confirm(baseVer, newVer)
+		// Determine the config default to pre-select.
+		var configDefault ui.GitAction
+		if cfg.Git.Tag || doTag {
+			configDefault = ui.GitActionTag
+		} else if cfg.Git.Commit || doCommit {
+			configDefault = ui.GitActionCommit
+		}
+
+		gitAction, err := ui.SelectGitAction(configDefault)
+		if err != nil {
+			return fmt.Errorf("prompt cancelled: %w", err)
+		}
+
+		// Update effective git flags from interactive selection.
+		doCommit = gitAction == ui.GitActionCommit || gitAction == ui.GitActionTag
+		doTag = gitAction == ui.GitActionTag
+
+		// Dirty tree check — before writing anything.
+		if doCommit && !flagDryRun {
+			dirty, modified, err := git.IsDirty()
+			if err != nil {
+				return fmt.Errorf("checking git status: %w", err)
+			}
+			if dirty {
+				fmt.Fprintln(os.Stderr, "\n✗ Uncommitted changes detected. Cannot commit/tag with unclean working tree.")
+				fmt.Fprintln(os.Stderr, "\n  Modified:")
+				for _, f := range modified {
+					fmt.Fprintf(os.Stderr, "    %s\n", f)
+				}
+				fmt.Fprintln(os.Stderr, "\n  Clean up first, or re-run and choose \"None\" to skip git.")
+				os.Exit(1)
+			}
+		}
+
+		// Show full summary and ask for confirmation.
+		tagPreview := config.FormatMessage(cfg.Git.TagPattern, newVer.String())
+		confirmed, err := ui.Confirm(baseVer, newVer, gitAction, tagPreview)
 		if err != nil {
 			return err
 		}

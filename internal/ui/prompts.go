@@ -213,13 +213,77 @@ func SelectReleaseBehavior(current bsemver.Version, bump semver.BumpType) (bsemv
 	return parsed, nil
 }
 
-// Confirm asks "Bumping: A → B. Confirm?"
-func Confirm(from, to bsemver.Version) (bool, error) {
+// GitAction represents the git operation to perform after a version bump.
+type GitAction int
+
+const (
+	GitActionNone   GitAction = iota // just write the files
+	GitActionCommit                  // git add + commit
+	GitActionTag                     // git add + commit + tag
+)
+
+// SelectGitAction asks the user what git operation to run after bumping.
+// defaultAction pre-selects the option that matches the user's vump.toml config.
+func SelectGitAction(defaultAction GitAction) (GitAction, error) {
+	type opt struct {
+		label  string
+		action GitAction
+	}
+	const (
+		valNone   = "none"
+		valCommit = "commit"
+		valTag    = "tag"
+	)
+	defaultVal := valNone
+	switch defaultAction {
+	case GitActionCommit:
+		defaultVal = valCommit
+	case GitActionTag:
+		defaultVal = valTag
+	}
+
+	var selected string
+	selected = defaultVal // pre-select based on config
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Git action after bumping:").
+				Options(
+					huh.NewOption("None    — just write the files", valNone),
+					huh.NewOption("Commit  — git add + commit", valCommit),
+					huh.NewOption("Tag     — git add + commit + tag  (tag implies commit)", valTag),
+				).
+				Value(&selected),
+		),
+	)
+	if err := form.Run(); err != nil {
+		return GitActionNone, err
+	}
+	switch selected {
+	case valCommit:
+		return GitActionCommit, nil
+	case valTag:
+		return GitActionTag, nil
+	default:
+		return GitActionNone, nil
+	}
+}
+
+// Confirm asks the user to approve the bump. Shows the git action in the summary.
+func Confirm(from, to bsemver.Version, gitAction GitAction, tagPattern string) (bool, error) {
+	gitLine := ""
+	switch gitAction {
+	case GitActionCommit:
+		gitLine = "\nGit:     commit"
+	case GitActionTag:
+		gitLine = fmt.Sprintf("\nGit:     tag %s", tagPattern)
+	}
+
 	var confirmed bool
 	form := huh.NewForm(
 		huh.NewGroup(
 			huh.NewConfirm().
-				Title(fmt.Sprintf("Bumping: %s  →  %s", from.String(), to.String())).
+				Title(fmt.Sprintf("Bumping: %s  →  %s%s", from.String(), to.String(), gitLine)).
 				Affirmative("Yes").
 				Negative("No").
 				Value(&confirmed),
