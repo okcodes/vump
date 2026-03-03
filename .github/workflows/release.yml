@@ -16,50 +16,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Read version from tag
-        id: version
-        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Verify tag matches source
-        # Uses the action defined in this repo itself.
-        uses: ./.github/actions/check
-        with:
-          version: ${{ github.ref_name }}
-
       - name: Run tests
-        run: go test ./...
+        run: |
+          chmod +x test.sh
+          ./test.sh
 
       - name: Build all platform binaries
         run: |
-          VERSION="${{ steps.version.outputs.value }}"
-          LDFLAGS="-s -w -X main.Version=${VERSION}"
-          mkdir -p dist
+          chmod +x build.sh
+          ./build.sh
 
-          targets=(
-            "linux   amd64  "
-            "linux   arm64  "
-            "darwin  amd64  "
-            "darwin  arm64  "
-            "windows amd64  .exe"
-            "windows arm64  .exe"
-          )
+      - name: Verify tag matches source versions
+        # Uses the linux-amd64 binary just built above — no Go install needed.
+        run: ./dist/vump-linux-amd64 check "${{ github.ref_name }}"
 
-          for target in "${targets[@]}"; do
-            read -r GOOS GOARCH EXT <<< "$target"
-            OUTPUT="dist/vump-${GOOS}-${GOARCH}${EXT}"
-            echo "Building ${OUTPUT}…"
-            GOOS=$GOOS GOARCH=$GOARCH CGO_ENABLED=0 \
-              go build -trimpath -ldflags "$LDFLAGS" -o "$OUTPUT" .
-          done
-
-          ls -lh dist/
-
-      - name: Create GitHub Release and upload assets
+      - name: Create GitHub Release and upload binaries
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

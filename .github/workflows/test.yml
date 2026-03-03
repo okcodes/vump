@@ -14,13 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Vet
-        run: go vet ./...
-
-      - name: Test
-        run: go test ./... -v
+      - name: Vet and test
+        run: |
+          chmod +x test.sh
+          ./test.sh
