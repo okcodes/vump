@@ -201,7 +201,7 @@ func run(cmd *cobra.Command, args []string) error {
 
 		// Show full summary and confirm.
 		tagPreview := config.FormatMessage(cfg.Git.TagPattern, newVer.String())
-		confirmed, err := ui.Confirm(baseVer, newVer, gitAction, tagPreview)
+		confirmed, err := ui.Confirm(baseVer, newVer, gitAction, tagPreview, doPush)
 		if err != nil {
 			return err
 		}

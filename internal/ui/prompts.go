@@ -270,13 +270,20 @@ func SelectGitAction(defaultAction GitAction) (GitAction, error) {
 }
 
 // Confirm asks the user to approve the bump. Shows the git action in the summary.
-func Confirm(from, to bsemver.Version, gitAction GitAction, tagPattern string) (bool, error) {
+func Confirm(from, to bsemver.Version, gitAction GitAction, tagPattern string, doPush bool) (bool, error) {
 	gitLine := ""
 	switch gitAction {
 	case GitActionCommit:
 		gitLine = "\nGit:     commit"
 	case GitActionTag:
 		gitLine = fmt.Sprintf("\nGit:     tag %s", tagPattern)
+	}
+	if gitAction != GitActionNone {
+		if doPush {
+			gitLine += "\nPush:    Yes"
+		} else {
+			gitLine += "\nPush:    No"
+		}
 	}
 
 	var confirmed bool
