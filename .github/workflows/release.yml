@@ -16,6 +16,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify tag matches source
+        # Uses the action defined in this repo itself.
+        uses: ./.github/actions/check
+        with:
+          version: ${{ github.ref_name }}
+
       - name: Run tests
         run: |
           chmod +x test.sh
@@ -26,9 +32,11 @@ jobs:
           chmod +x build.sh
           ./build.sh
 
-      - name: Verify tag matches source versions
-        # Uses the linux-amd64 binary just built above — no Go install needed.
-        run: ./dist/vump-linux-amd64 check "${{ github.ref_name }}"
+      # Only first release ever needed this as no release where to download binaries from.
+      # for the ./.github/actions/check action to work.
+      # - name: Verify tag matches source versions
+      #   # Uses the linux-amd64 binary just built above — no Go install needed.
+      #   run: ./dist/vump-linux-amd64 check "${{ github.ref_name }}"
 
       - name: Create GitHub Release and upload binaries
         env:
