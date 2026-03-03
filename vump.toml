@@ -4,7 +4,7 @@
 # Optional git integration.
 # CLI flags (--commit, --tag) override these settings.
 [git]
-commit = false
+commit = true
 commit_message = "chore: bump version to v{new_version}"
 tag = false
 tag_pattern = "v{new_version}"
