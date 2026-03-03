@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write  # needed to create GitHub releases and upload assets
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Read version from tag
+        id: version
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag matches source
+        # Uses the action defined in this repo itself.
+        uses: ./.github/actions/check
+        with:
+          version: ${{ github.ref_name }}
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Build all platform binaries
+        run: |
+          VERSION="${{ steps.version.outputs.value }}"
+          LDFLAGS="-s -w -X main.Version=${VERSION}"
+          mkdir -p dist
+
+          targets=(
+            "linux   amd64  "
+            "linux   arm64  "
+            "darwin  amd64  "
+            "darwin  arm64  "
+            "windows amd64  .exe"
+            "windows arm64  .exe"
+          )
+
+          for target in "${targets[@]}"; do
+            read -r GOOS GOARCH EXT <<< "$target"
+            OUTPUT="dist/vump-${GOOS}-${GOARCH}${EXT}"
+            echo "Building ${OUTPUT}…"
+            GOOS=$GOOS GOARCH=$GOARCH CGO_ENABLED=0 \
+              go build -trimpath -ldflags "$LDFLAGS" -o "$OUTPUT" .
+          done
+
+          ls -lh dist/
+
+      - name: Create GitHub Release and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "vump ${{ github.ref_name }}" \
+            --generate-notes \
+            dist/*

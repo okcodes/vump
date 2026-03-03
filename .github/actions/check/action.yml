@@ -1,0 +1,57 @@
+name: 'vump check'
+description: 'Verify all version files tracked by vump.toml match the given version. Exits 1 with a clear report if any file does not match.'
+
+inputs:
+  version:
+    description: 'Version to verify. Accepts bare semver (1.2.3) or v-prefixed (v1.2.3).'
+    required: true
+  config:
+    description: 'Path to vump.toml, relative to the repository root. The action runs vump from the directory containing this file.'
+    required: false
+    default: 'vump.toml'
+  vump-version:
+    description: 'vump release tag to download (e.g. v0.2.0). Defaults to "latest".'
+    required: false
+    default: 'latest'
+
+runs:
+  using: composite
+  steps:
+    - name: Download vump binary
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # Resolve OS
+        OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+        # Resolve arch (uname -m → go arch naming)
+        case "$(uname -m)" in
+          x86_64)          ARCH="amd64" ;;
+          aarch64|arm64)   ARCH="arm64" ;;
+          *) echo "::error::Unsupported architecture: $(uname -m)"; exit 1 ;;
+        esac
+
+        BINARY="vump-${OS}-${ARCH}"
+
+        # Resolve release tag
+        if [[ "${{ inputs.vump-version }}" == "latest" ]]; then
+          TAG=$(curl -fsSL https://api.github.com/repos/okcodes/vump/releases/latest \
+                | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+        else
+          TAG="${{ inputs.vump-version }}"
+        fi
+
+        echo "Downloading vump ${TAG} (${BINARY})…"
+        curl -fsSLo /usr/local/bin/vump \
+          "https://github.com/okcodes/vump/releases/download/${TAG}/${BINARY}"
+        chmod +x /usr/local/bin/vump
+        vump --version
+
+    - name: Run vump check
+      shell: bash
+      run: |
+        # cd to the directory containing vump.toml so it is found automatically.
+        CONFIG_DIR=$(dirname "${{ github.workspace }}/${{ inputs.config }}")
+        cd "$CONFIG_DIR"
+        vump check "${{ inputs.version }}"
+
