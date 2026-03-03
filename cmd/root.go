@@ -23,6 +23,7 @@ var (
 	flagFrom   string
 	flagCommit bool
 	flagTag    bool
+	flagPush   bool
 )
 
 // Execute is the entry point called from main.
@@ -52,6 +53,7 @@ func init() {
 	rootCmd.Flags().StringVar(&flagFrom, "from", "", "Base bump for pre-release from stable: patch, minor, or major")
 	rootCmd.Flags().BoolVar(&flagCommit, "commit", false, "git add + commit after bumping")
 	rootCmd.Flags().BoolVar(&flagTag, "tag", false, "git add + commit + tag after bumping (implies --commit)")
+	rootCmd.Flags().BoolVar(&flagPush, "push", false, "Push commit (and tag) to remote after bumping (implies --commit)")
 }
 
 // fileVersionPair holds a file entry and its parsed version.
@@ -76,16 +78,20 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	// Track whether the user explicitly passed a git flag on the CLI.
-	// Explicit flag = the user has already answered the "what git action?" question.
+	// Explicit flag = the user has already answered the question.
 	explicitGitFlag := flagCommit || flagTag
+	explicitPushFlag := flagPush
 
-	// Starting values from CLI flags only (config merging happens below,
-	// separately for interactive vs non-interactive paths).
+	// Starting values from CLI flags only.
 	doCommit := flagCommit
 	doTag := flagTag
+	if flagPush {
+		doCommit = true // --push implies at least a commit
+	}
 	if doTag {
 		doCommit = true
 	}
+	doPush := flagPush
 
 	// Read all versions from declared files.
 	var pairs []fileVersionPair
@@ -164,6 +170,18 @@ func run(cmd *cobra.Command, args []string) error {
 			doTag = gitAction == ui.GitActionTag
 		}
 
+		// Push prompt — only if commit or tag will happen.
+		if doCommit {
+			if explicitPushFlag {
+				doPush = true
+			} else {
+				doPush, err = ui.ConfirmPush(cfg.Git.Push)
+				if err != nil {
+					return fmt.Errorf("prompt cancelled: %w", err)
+				}
+			}
+		}
+
 		// Dirty tree check — now that we know whether commit/tag will happen.
 		if doCommit && !flagDryRun {
 			dirty, modified, gitErr := git.IsDirty()
@@ -193,10 +211,14 @@ func run(cmd *cobra.Command, args []string) error {
 		}
 	} else {
 		// ── Non-interactive path (bump type given as arg) ─────────────────────
-		// Merge flags + config now that we know there are no prompts.
+		// Merge flags + config.
 		doCommit = flagCommit || cfg.Git.Commit
 		doTag = flagTag || cfg.Git.Tag
+		doPush = flagPush || cfg.Git.Push
 		if doTag {
+			doCommit = true
+		}
+		if doPush {
 			doCommit = true
 		}
 		// Dirty tree check before any writes.
@@ -253,15 +275,38 @@ func run(cmd *cobra.Command, args []string) error {
 		}
 		fmt.Printf("\n✓ Committed: %s\n", commitMsg)
 
+		var tagName string
 		if doTag {
-			tagName := config.FormatMessage(cfg.Git.TagPattern, newVerStr)
+			tagName = config.FormatMessage(cfg.Git.TagPattern, newVerStr)
 			if err := git.Tag(tagName); err != nil {
 				return err
 			}
-			fmt.Printf("✓ Tagged: %s\n", tagName)
-			fmt.Printf("\n  To push:\n    git push && git push origin %s\n", tagName)
+			fmt.Printf("✓ Tagged:    %s\n", tagName)
+		}
+
+		if doPush {
+			fmt.Print("  Pushing…  ")
+			if err := git.Push(tagName); err != nil {
+				fmt.Println("✗ failed")
+				fmt.Fprintf(os.Stderr, "\nError: %s\n", err)
+				fmt.Fprintln(os.Stderr, "\nFiles were written and committed/tagged successfully.")
+				fmt.Fprintln(os.Stderr, "Push failed — run manually:")
+				if tagName != "" {
+					fmt.Fprintf(os.Stderr, "  git push && git push origin %s\n", tagName)
+				} else {
+					fmt.Fprintln(os.Stderr, "  git push")
+				}
+				os.Exit(1)
+			}
+			fmt.Println("✓")
+			fmt.Println("✓ Pushed")
 		} else {
-			fmt.Println("\n  To push:\n    git push")
+			// Push didn't happen — show manual instructions.
+			if tagName != "" {
+				fmt.Printf("\n  To push:\n    git push && git push origin %s\n", tagName)
+			} else {
+				fmt.Println("\n  To push:\n    git push")
+			}
 		}
 	}
 

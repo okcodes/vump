@@ -58,3 +58,21 @@ func Tag(name string) error {
 	}
 	return nil
 }
+
+// Push pushes the current branch to the configured upstream.
+// If tagName is non-empty, also pushes that specific tag ref.
+func Push(tagName string) error {
+	cmd := exec.Command("git", "push")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git push failed: %s", strings.TrimSpace(string(out)))
+	}
+	if tagName != "" {
+		cmd = exec.Command("git", "push", "origin", tagName)
+		out, err = cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("git push origin %s failed: %s", tagName, strings.TrimSpace(string(out)))
+		}
+	}
+	return nil
+}

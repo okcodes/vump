@@ -23,6 +23,7 @@ type GitConfig struct {
 	CommitMessage string `toml:"commit_message"`
 	Tag           bool   `toml:"tag"`
 	TagPattern    string `toml:"tag_pattern"`
+	Push          bool   `toml:"push"`
 }
 
 // FileEntry represents a single version file tracked by vump.

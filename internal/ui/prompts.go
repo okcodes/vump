@@ -295,6 +295,25 @@ func Confirm(from, to bsemver.Version, gitAction GitAction, tagPattern string) (
 	return confirmed, nil
 }
 
+// ConfirmPush asks whether to push the commit (and tag) to the remote.
+// configDefault pre-selects Yes if push = true is set in vump.toml.
+func ConfirmPush(configDefault bool) (bool, error) {
+	doPush := configDefault // honoured as the initial selection
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Push to remote after committing?").
+				Affirmative("Yes").
+				Negative("No").
+				Value(&doPush),
+		),
+	)
+	if err := form.Run(); err != nil {
+		return false, err
+	}
+	return doPush, nil
+}
+
 // joinBasenames produces "a, b, c" from a list of paths using only base filenames.
 func joinBasenames(paths []string) string {
 	result := ""
