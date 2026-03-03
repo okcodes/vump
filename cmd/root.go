@@ -75,28 +75,16 @@ func run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Resolve effective git flags (CLI overrides, --tag implies --commit).
-	doCommit := flagCommit || cfg.Git.Commit
-	doTag := flagTag || cfg.Git.Tag
+	// Track whether the user explicitly passed a git flag on the CLI.
+	// Explicit flag = the user has already answered the "what git action?" question.
+	explicitGitFlag := flagCommit || flagTag
+
+	// Starting values from CLI flags only (config merging happens below,
+	// separately for interactive vs non-interactive paths).
+	doCommit := flagCommit
+	doTag := flagTag
 	if doTag {
 		doCommit = true
-	}
-
-	// Dirty tree check — before any prompts or writes.
-	if doCommit && !flagDryRun {
-		dirty, modified, err := git.IsDirty()
-		if err != nil {
-			return fmt.Errorf("checking git status: %w", err)
-		}
-		if dirty {
-			fmt.Fprintln(os.Stderr, "✗ Uncommitted changes detected. Clean your working tree before using --commit or --tag.")
-			fmt.Fprintln(os.Stderr, "\n  Modified:")
-			for _, f := range modified {
-				fmt.Fprintf(os.Stderr, "    %s\n", f)
-			}
-			fmt.Fprintln(os.Stderr, "\n  Run: git stash   or   git commit -m \"wip\"")
-			os.Exit(1)
-		}
 	}
 
 	// Read all versions from declared files.
@@ -131,7 +119,7 @@ func run(cmd *cobra.Command, args []string) error {
 	// Determine the bump type.
 	var bumpType semver.BumpType
 	if len(args) == 0 {
-		// Fully interactive.
+		// Fully interactive: ask the user.
 		chosen, err := ui.SelectBumpType(baseVer)
 		if err != nil {
 			return fmt.Errorf("prompt cancelled: %w", err)
@@ -147,30 +135,40 @@ func run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// In fully interactive mode: ask git action, check dirty tree, then confirm.
+	// ── Interactive path (no bump type arg given) ─────────────────────────────
 	if len(args) == 0 {
-		// Determine the config default to pre-select.
-		var configDefault ui.GitAction
-		if cfg.Git.Tag || doTag {
-			configDefault = ui.GitActionTag
-		} else if cfg.Git.Commit || doCommit {
-			configDefault = ui.GitActionCommit
-		}
-
-		gitAction, err := ui.SelectGitAction(configDefault)
-		if err != nil {
-			return fmt.Errorf("prompt cancelled: %w", err)
-		}
-
-		// Update effective git flags from interactive selection.
-		doCommit = gitAction == ui.GitActionCommit || gitAction == ui.GitActionTag
-		doTag = gitAction == ui.GitActionTag
-
-		// Dirty tree check — before writing anything.
-		if doCommit && !flagDryRun {
-			dirty, modified, err := git.IsDirty()
+		// Git action: only prompt if the user hasn't already said so via a flag.
+		// If they did pass --commit/--tag, honour it and skip the question.
+		var gitAction ui.GitAction
+		if explicitGitFlag {
+			// Map the CLI flags to a GitAction so Confirm can display it.
+			if doTag {
+				gitAction = ui.GitActionTag
+			} else {
+				gitAction = ui.GitActionCommit
+			}
+		} else {
+			// No explicit flag: ask interactively, pre-selecting the config default.
+			var configDefault ui.GitAction
+			if cfg.Git.Tag {
+				configDefault = ui.GitActionTag
+			} else if cfg.Git.Commit {
+				configDefault = ui.GitActionCommit
+			}
+			gitAction, err = ui.SelectGitAction(configDefault)
 			if err != nil {
-				return fmt.Errorf("checking git status: %w", err)
+				return fmt.Errorf("prompt cancelled: %w", err)
+			}
+			// Apply the user's interactive choice.
+			doCommit = gitAction == ui.GitActionCommit || gitAction == ui.GitActionTag
+			doTag = gitAction == ui.GitActionTag
+		}
+
+		// Dirty tree check — now that we know whether commit/tag will happen.
+		if doCommit && !flagDryRun {
+			dirty, modified, gitErr := git.IsDirty()
+			if gitErr != nil {
+				return fmt.Errorf("checking git status: %w", gitErr)
 			}
 			if dirty {
 				fmt.Fprintln(os.Stderr, "\n✗ Uncommitted changes detected. Cannot commit/tag with unclean working tree.")
@@ -183,7 +181,7 @@ func run(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		// Show full summary and ask for confirmation.
+		// Show full summary and confirm.
 		tagPreview := config.FormatMessage(cfg.Git.TagPattern, newVer.String())
 		confirmed, err := ui.Confirm(baseVer, newVer, gitAction, tagPreview)
 		if err != nil {
@@ -192,6 +190,30 @@ func run(cmd *cobra.Command, args []string) error {
 		if !confirmed {
 			fmt.Println("Aborted.")
 			return nil
+		}
+	} else {
+		// ── Non-interactive path (bump type given as arg) ─────────────────────
+		// Merge flags + config now that we know there are no prompts.
+		doCommit = flagCommit || cfg.Git.Commit
+		doTag = flagTag || cfg.Git.Tag
+		if doTag {
+			doCommit = true
+		}
+		// Dirty tree check before any writes.
+		if doCommit && !flagDryRun {
+			dirty, modified, gitErr := git.IsDirty()
+			if gitErr != nil {
+				return fmt.Errorf("checking git status: %w", gitErr)
+			}
+			if dirty {
+				fmt.Fprintln(os.Stderr, "✗ Uncommitted changes detected. Clean your working tree before using --commit or --tag.")
+				fmt.Fprintln(os.Stderr, "\n  Modified:")
+				for _, f := range modified {
+					fmt.Fprintf(os.Stderr, "    %s\n", f)
+				}
+				fmt.Fprintln(os.Stderr, "\n  Run: git stash   or   git commit -m \"wip\"")
+				os.Exit(1)
+			}
 		}
 	}
 
