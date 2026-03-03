@@ -9,8 +9,8 @@ import (
 	bsemver "github.com/blang/semver/v4"
 	"github.com/spf13/cobra"
 
-	"github.com/x/vump/internal/config"
-	"github.com/x/vump/internal/version"
+	"github.com/okcodes/vump/internal/config"
+	"github.com/okcodes/vump/internal/version"
 )
 
 var checkCmd = &cobra.Command{

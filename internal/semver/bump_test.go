@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	bsemver "github.com/blang/semver/v4"
-	"github.com/x/vump/internal/semver"
+	"github.com/okcodes/vump/internal/semver"
 )
 
 // helper to parse without boilerplate

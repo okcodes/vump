@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/x/vump/internal/version"
+	"github.com/okcodes/vump/internal/version"
 )
 
 // ─── DetectType ───────────────────────────────────────────────────────────────

@@ -5,10 +5,10 @@
 ## Install
 
 ```sh
-go install github.com/x/vump@latest
+go install github.com/okcodes/vump@latest
 ```
 
-Or download a pre-built binary from [GitHub Releases](https://github.com/x/vump/releases).
+Or download a pre-built binary from [GitHub Releases](https://github.com/okcodes/vump/releases).
 
 ## Quick Start
 

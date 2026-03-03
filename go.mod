@@ -1,4 +1,4 @@
-module github.com/x/vump
+module github.com/okcodes/vump
 
 go 1.25.0
 

@@ -6,7 +6,7 @@ import (
 
 	bsemver "github.com/blang/semver/v4"
 	"github.com/charmbracelet/huh"
-	"github.com/x/vump/internal/semver"
+	"github.com/okcodes/vump/internal/semver"
 )
 
 // VersionedFile pairs a file path with its currently-read version.

@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/okcodes/vump/internal/version"
 	"github.com/pelletier/go-toml/v2"
-	"github.com/x/vump/internal/version"
 )
 
 // Config is the top-level structure for vump.toml.

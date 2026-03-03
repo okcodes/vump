@@ -1,6 +1,6 @@
 package main
 
-import "github.com/x/vump/cmd"
+import "github.com/okcodes/vump/cmd"
 
 // Version is injected at build time via:
 //

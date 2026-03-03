@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/x/vump/internal/config"
+	"github.com/okcodes/vump/internal/config"
 )
 
 func writeFile(t *testing.T, dir, name, content string) {
