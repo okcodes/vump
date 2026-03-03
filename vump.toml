@@ -2,12 +2,13 @@
 # Place this file at the root of your monorepo.
 
 # Optional git integration.
-# CLI flags (--commit, --tag) override these settings.
+# CLI flags (--commit, --tag, --push) override these settings.
 [git]
 commit = true
 commit_message = "chore: bump version to v{new_version}"
 tag = false
 tag_pattern = "v{new_version}"
+push = false
 
 # Declare every file that vump should keep in sync.
 # Supported filenames: package.json, Cargo.toml, VERSION

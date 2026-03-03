@@ -44,6 +44,7 @@ vump alpha                 Start or increment alpha pre-release
 vump beta                  Start or increment beta pre-release
 vump rc                    Start or increment RC pre-release
 vump release               Drop pre-release suffix (1.2.3-rc.1 → 1.2.3)
+vump check <version>       Verify all tracked files match the given version
 ```
 
 ## Flags
@@ -55,6 +56,7 @@ vump release               Drop pre-release suffix (1.2.3-rc.1 → 1.2.3)
 | `--from <patch\|minor\|major>` | Required with alpha/beta/rc from a stable version (non-interactive) |
 | `--commit` | `git add` + `git commit` after bumping |
 | `--tag` | `git add` + `git commit` + `git tag` (implies `--commit`) |
+| `--push` | Push commit and tag to remote after bumping (implies `--commit`) |
 
 ### Examples
 
@@ -112,11 +114,11 @@ tag = false
 tag_pattern = "v{new_version}"
 ```
 
-Or via flags (`--commit`, `--tag`). CLI flags override config file values.
+Or via flags (`--commit`, `--tag`, `--push`). CLI flags override config file values.
 
-`--tag` implies `--commit`. vump will never `git push` — it prints the push command for you instead.
+`--tag` implies `--commit`. Add `--push` to also push to remote; if push fails after a successful commit/tag, vump reports exactly what succeeded and shows the manual recovery command.
 
-**Dirty tree check:** if `--commit` or `--tag` is active, vump checks for uncommitted changes first and fails fast. Only the files declared in `vump.toml` are staged.
+**Dirty tree check:** if `--commit`, `--tag`, or `--push` is active, vump checks for uncommitted changes first and fails fast. Only the files declared in `vump.toml` are staged.
 
 ## Out-of-Sync Files
 
@@ -133,7 +135,10 @@ vump never runs `npm install` or `cargo build`.
 ## Development
 
 ```sh
-go build ./...          # build
-go test ./...           # unit + E2E tests
-go vet ./...            # linter
+./test.sh              # vet + all tests (via Docker)
+./build.sh             # cross-platform builds (via Docker)
+
+# Or without Docker (requires local Go install):
+go test ./...
+go build ./...
 ```
