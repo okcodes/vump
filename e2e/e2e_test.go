@@ -360,3 +360,125 @@ path = "VERSION"
 		t.Errorf("got %q", fx.readFile("VERSION"))
 	}
 }
+
+// ─── check subcommand ─────────────────────────────────────────────────────────
+
+func TestE2E_Check_AllMatch_SilentSuccess(t *testing.T) {
+	fx := newFixture(t).
+		write("VERSION", "1.2.3\n").
+		write("package.json", `{"name":"app","version":"1.2.3"}`+"\n").
+		write("vump.toml", `
+[[files]]
+path = "VERSION"
+[[files]]
+path = "package.json"
+`)
+	stdout, stderr, err := fx.vump("check", "1.2.3")
+	if err != nil {
+		t.Fatalf("expected silent success, got error\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+	// Silent on success — no output expected.
+	if stdout != "" || stderr != "" {
+		t.Errorf("expected no output on success, got stdout=%q stderr=%q", stdout, stderr)
+	}
+}
+
+func TestE2E_Check_VPrefix_Stripped(t *testing.T) {
+	fx := newFixture(t).
+		write("VERSION", "2.0.0\n").
+		write("vump.toml", `[[files]]
+path = "VERSION"
+`)
+	_, stderr, err := fx.vump("check", "v2.0.0")
+	if err != nil {
+		t.Fatalf("expected success with v-prefix, got error\nstderr: %s", stderr)
+	}
+}
+
+func TestE2E_Check_SingleMismatch_Exit1(t *testing.T) {
+	fx := newFixture(t).
+		write("VERSION", "0.1.0\n").
+		write("vump.toml", `[[files]]
+path = "VERSION"
+`)
+	stdout, stderr, err := fx.vump("check", "0.2.0")
+	if err == nil {
+		t.Fatalf("expected exit 1 on mismatch\nstdout: %s", stdout)
+	}
+	if !strings.Contains(stderr, "0.2.0") {
+		t.Errorf("expected expected version in stderr: %q", stderr)
+	}
+	if !strings.Contains(stderr, "VERSION") {
+		t.Errorf("expected file name in stderr: %q", stderr)
+	}
+	if !strings.Contains(stderr, "0.1.0") {
+		t.Errorf("expected found version in stderr: %q", stderr)
+	}
+}
+
+func TestE2E_Check_MultipleMismatches(t *testing.T) {
+	fx := newFixture(t).
+		write("VERSION", "0.1.0\n").
+		write("package.json", `{"name":"app","version":"0.1.1"}`+"\n").
+		write("vump.toml", `
+[[files]]
+path = "VERSION"
+[[files]]
+path = "package.json"
+`)
+	_, stderr, err := fx.vump("check", "0.2.0")
+	if err == nil {
+		t.Fatal("expected exit 1 when multiple files mismatch")
+	}
+	if !strings.Contains(stderr, "VERSION") || !strings.Contains(stderr, "package.json") {
+		t.Errorf("expected both files listed in stderr: %q", stderr)
+	}
+}
+
+func TestE2E_Check_PartialMatch_StillFails(t *testing.T) {
+	// One file matches, one doesn't — should still exit 1.
+	fx := newFixture(t).
+		write("VERSION", "1.0.0\n").
+		write("package.json", `{"name":"app","version":"0.9.0"}`+"\n").
+		write("vump.toml", `
+[[files]]
+path = "VERSION"
+[[files]]
+path = "package.json"
+`)
+	_, stderr, err := fx.vump("check", "1.0.0")
+	if err == nil {
+		t.Fatal("expected exit 1 when one file mismatches")
+	}
+	// Only package.json should appear in the mismatch output.
+	if !strings.Contains(stderr, "package.json") {
+		t.Errorf("expected package.json in mismatch report: %q", stderr)
+	}
+	if strings.Contains(stderr, "VERSION") {
+		t.Errorf("VERSION matched and should not appear in report: %q", stderr)
+	}
+}
+
+func TestE2E_Check_InvalidVersionArg(t *testing.T) {
+	fx := newFixture(t).
+		write("VERSION", "1.0.0\n").
+		write("vump.toml", `[[files]]
+path = "VERSION"
+`)
+	_, _, err := fx.vump("check", "not-a-version")
+	if err == nil {
+		t.Error("expected error for invalid version argument")
+	}
+}
+
+func TestE2E_Check_PreReleaseVersion(t *testing.T) {
+	fx := newFixture(t).
+		write("VERSION", "1.0.0-alpha.3\n").
+		write("vump.toml", `[[files]]
+path = "VERSION"
+`)
+	_, stderr, err := fx.vump("check", "v1.0.0-alpha.3")
+	if err != nil {
+		t.Fatalf("expected success for matching pre-release\nstderr: %s", stderr)
+	}
+}
