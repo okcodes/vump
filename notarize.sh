@@ -130,7 +130,17 @@ echo "→ Creating universal binary with lipo…"
 lipo -create -output "$UNIVERSAL" "$AMD64" "$ARM64"
 lipo -info "$UNIVERSAL"
 
-for BIN in "$AMD64" "$ARM64" "$UNIVERSAL"; do
+# ── Code sign and notarize ────────────────────────────────────────────────────
+TARGETS=(
+  # Since Apple allows only 75 notarizations submissions per day per Team ID
+  # we're only notarizing the universal app version.
+  # So we comment out amd64 and arm64 so they don't get notarized.
+  # "$AMD64"
+  # "$ARM64"
+  "$UNIVERSAL"
+)
+
+for BIN in "${TARGETS[@]}"; do
   echo ""
   sign_binary "$BIN"
   notarize_binary "$BIN"
@@ -142,7 +152,7 @@ echo "  All done! ✓"
 echo "========================================"
 echo ""
 echo "Final verification (codesign chain):"
-for BIN in "$AMD64" "$ARM64" "$UNIVERSAL"; do
+for BIN in "${TARGETS[@]}"; do
   if [[ ! -f "$BIN" ]]; then continue; fi
   echo ""
   echo "  $(basename "$BIN"):"
