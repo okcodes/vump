@@ -92,18 +92,17 @@ notarize_binary() {
   echo "  ✓ Notarization accepted"
   rm -f "$zip"
 
-  echo "→ Stapling ticket to: $(basename "$bin")"
-  # Note: Apple stapling of bare binaries (non-.app/.pkg) often fails —
-  # this is expected. The binary is still notarized; Gatekeeper verifies
-  # online. Stapling just embeds the ticket so offline verification works.
-  #
-  # Since stapling binaries is not supported in bare binaries we don't even try it.
-  # So, stapling command bellow is commented out.
-  #
+  # Stapling embeds the notarization ticket directly into the distributed file so
+  # Gatekeeper can verify offline without phoning Apple. However, stapling is only
+  # supported for .app bundles, .dmg disk images, and .pkg installers — NOT for
+  # bare Mach-O executables. Attempting it returns Error 73 (errSecCSNotSupported).
+  # For bare binaries, Gatekeeper falls back to an online check on first launch.
+  # No action needed here. Notarization is still valid.
+  # echo "→ Stapling ticket to: $(basename "$bin")"
   # if xcrun stapler staple "$bin" 2>&1; then
   #   echo "  ✓ Stapled successfully"
   # else
-  #   echo "  ⚠ Staple failed (normal for bare CLI binaries — notarization still valid)"
+  #   echo "  ⚠ Staple failed"
   # fi
 }
 
