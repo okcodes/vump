@@ -96,11 +96,15 @@ notarize_binary() {
   # Note: Apple stapling of bare binaries (non-.app/.pkg) often fails —
   # this is expected. The binary is still notarized; Gatekeeper verifies
   # online. Stapling just embeds the ticket so offline verification works.
-  if xcrun stapler staple "$bin" 2>&1; then
-    echo "  ✓ Stapled successfully"
-  else
-    echo "  ⚠ Staple failed (normal for bare CLI binaries — notarization still valid)"
-  fi
+  #
+  # Since stapling binaries is not supported in bare binaries we don't even try it.
+  # So, stapling command bellow is commented out.
+  #
+  # if xcrun stapler staple "$bin" 2>&1; then
+  #   echo "  ✓ Stapled successfully"
+  # else
+  #   echo "  ⚠ Staple failed (normal for bare CLI binaries — notarization still valid)"
+  # fi
 }
 
 # ── Main ──────────────────────────────────────────────────────────────────────
