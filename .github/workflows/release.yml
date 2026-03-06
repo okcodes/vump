@@ -107,8 +107,6 @@ jobs:
       # keychain is not left behind on the runner.
       - name: Delete ephemeral keychain
         if: always()
-        env:
-          KEYCHAIN_NAME: ${{ env.KEYCHAIN_NAME }}
         run: |
           chmod +x delete-keychain.sh
           ./delete-keychain.sh
