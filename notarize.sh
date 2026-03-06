@@ -6,7 +6,10 @@
 #   APP_SPECIFIC_PASSWORD_VUMP — App-specific password from appleid.apple.com
 #   APPLE_TEAM_ID              — Your 10-char Apple team ID
 #
-# Produces: signed + notarized arm64, amd64, and universal binaries.
+# Produces:
+#   - dist/vump-darwin-universal (signed + notarized)
+#   - dist/vump-darwin-arm64 and dist/vump-darwin-amd64 are built by build.sh
+#     and used here only as lipo inputs — they are NOT signed or notarized.
 #
 # Usage:
 #   ./notarize.sh
@@ -130,10 +133,11 @@ lipo -create -output "$UNIVERSAL" "$AMD64" "$ARM64"
 lipo -info "$UNIVERSAL"
 
 # ── Code sign and notarize ────────────────────────────────────────────────────
+# Only the universal binary is signed and notarized. The arm64 and amd64 binaries
+# were already merged into it by lipo and are not processed further.
+# If you ever need to notarize them independently, uncomment them below.
+# Note: Apple enforces a rate limit of 75 notarization submissions per day per Team ID.
 TARGETS=(
-  # Since Apple allows only 75 notarizations submissions per day per Team ID
-  # we're only notarizing the universal app version.
-  # So we comment out amd64 and arm64 so they don't get notarized.
   # "$AMD64"
   # "$ARM64"
   "$UNIVERSAL"
