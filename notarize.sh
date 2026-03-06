@@ -6,10 +6,14 @@
 #   APP_SPECIFIC_PASSWORD_VUMP — App-specific password from appleid.apple.com
 #   APPLE_TEAM_ID              — Your 10-char Apple team ID
 #
-# Produces:
+# Signs/notarizes:
 #   - dist/vump-darwin-universal (signed + notarized)
-#   - dist/vump-darwin-arm64 and dist/vump-darwin-amd64 are built by build.sh
-#     and used here only as lipo inputs — they are NOT signed or notarized.
+#
+# Does not sign/notarize:
+#   - dist/vump-darwin-arm64
+#   - dist/vump-darwin-amd64
+#
+# Run ./build.sh then ./build-universal.sh before this script to create the binaries.
 #
 # Usage:
 #   ./notarize.sh
@@ -122,30 +126,27 @@ echo "  Identity: ${IDENTITY}"
 echo "========================================"
 echo ""
 
-# Verify individual binaries exist before doing anything else.
-for BIN in "$AMD64" "$ARM64"; do
-  if [[ ! -f "$BIN" ]]; then
-    echo "ERROR: Binary not found: $BIN"
-    echo "       Run ./build.sh first"
-    exit 1
-  fi
-done
-
-# ── Build Universal Binary ────────────────────────────────────────────────────
-echo "→ Creating universal binary with lipo…"
-lipo -create -output "$UNIVERSAL" "$AMD64" "$ARM64"
-lipo -info "$UNIVERSAL"
-
 # ── Code sign and notarize ────────────────────────────────────────────────────
 # Only the universal binary is signed and notarized. The arm64 and amd64 binaries
 # were already merged into it by lipo and are not processed further.
 # If you ever need to notarize them independently, uncomment them below.
 # Note: Apple enforces a rate limit of 75 notarization submissions per day per Team ID.
+# So, that's why amd64 and arm64 are commented-out targets as notarizing universal only
+# is more convenient as it only requires one notarization submission.
 TARGETS=(
   # "$AMD64"
   # "$ARM64"
   "$UNIVERSAL"
 )
+
+# Binaries must exist
+for BIN in "${TARGETS[@]}"; do
+  if [[ ! -f "$BIN" ]]; then
+    echo "ERROR: $BIN not found"
+    echo "       Run ./build.sh then ./build-universal.sh first"
+    exit 1
+  fi
+done
 
 for BIN in "${TARGETS[@]}"; do
   echo ""
