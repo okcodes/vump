@@ -9,12 +9,12 @@ permissions:
   contents: write  # needed to create GitHub releases and upload assets
 
 jobs:
-  release:
-    name: Build and publish release
+  build:
+    name: Build
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Check release tag matches source version
         # Uses the action defined in this repo itself.
@@ -38,6 +38,58 @@ jobs:
       #   # Uses the linux-amd64 binary just built above — no Go install needed.
       #   run: ./dist/vump-linux-amd64 check "${{ github.ref_name }}"
 
+      # Uploaded as 'dist-unsigned' to make it explicit these have not been
+      # signed or notarized yet. Only the sign job produces the final assets.
+      - name: Upload unsigned binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist-unsigned
+          path: dist/
+          retention-days: 1
+
+  sign:
+    name: Sign, Notarize & Release
+    needs: build
+    runs-on: macos-latest
+    environment: Production-Signing
+    env:
+      KEYCHAIN_NAME: ci-signing-${{ github.run_id }}.keychain
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download unsigned binaries
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-unsigned
+          path: dist/
+
+      - name: Restore executable permissions
+        run: chmod +x dist/vump-darwin-amd64 dist/vump-darwin-arm64
+
+      - name: Import signing certificate
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          chmod +x import-cert.sh
+          ./import-cert.sh
+
+      - name: Build universal binary
+        run: |
+          chmod +x build-universal.sh
+          ./build-universal.sh
+
+      - name: Sign and notarize
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APP_SPECIFIC_PASSWORD_VUMP: ${{ secrets.APP_SPECIFIC_PASSWORD_VUMP }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          chmod +x notarize.sh
+          ./notarize.sh
+
       - name: Create GitHub Release and upload binaries
         env:
           GH_TOKEN: ${{ github.token }}
@@ -45,4 +97,18 @@ jobs:
           gh release create "${{ github.ref_name }}" \
             --title "vump ${{ github.ref_name }}" \
             --generate-notes \
-            dist/*
+            dist/vump-darwin-universal \
+            dist/vump-linux-amd64 \
+            dist/vump-linux-arm64 \
+            dist/vump-windows-amd64.exe \
+            dist/vump-windows-arm64.exe
+
+      # Always runs — even if an earlier step fails — to ensure the ephemeral
+      # keychain is not left behind on the runner.
+      - name: Delete ephemeral keychain
+        if: always()
+        env:
+          KEYCHAIN_NAME: ${{ env.KEYCHAIN_NAME }}
+        run: |
+          chmod +x delete-keychain.sh
+          ./delete-keychain.sh
