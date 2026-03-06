@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify tag matches source
+      - name: Check release tag matches source version
         # Uses the action defined in this repo itself.
         uses: ./.github/actions/check
         with:
