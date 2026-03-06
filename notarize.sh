@@ -43,6 +43,9 @@ AMD64="$DIST/vump-darwin-amd64"
 ARM64="$DIST/vump-darwin-arm64"
 UNIVERSAL="$DIST/vump-darwin-universal"
 
+# UTC timestamp + PID: unique per invocation, shared across all binaries in this run.
+RUN_ID="$(date -u +%Y%m%dT%H%M%S)-$$"
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 sign_binary() {
   local bin="$1"
@@ -59,7 +62,8 @@ sign_binary() {
 
 notarize_binary() {
   local bin="$1"
-  local zip="${bin}.zip"
+  local zip="$DIST/notary-$(basename "$bin")-${RUN_ID}.zip"
+  local result_file="$DIST/notary-result-$(basename "$bin")-${RUN_ID}.json"
 
   echo "→ Zipping for notarization: $(basename "$zip")"
   # Remove previous zip if any.
@@ -74,16 +78,16 @@ notarize_binary() {
     --password "$PASSWORD" \
     --team-id "$TEAM_ID" \
     --wait \
-    --output-format json | tee /tmp/notary-result.json
+    --output-format json | tee "$result_file"
 
-  # Check submission result
+  # Check submission result.
   local status
-  status=$(jq -r '.status' /tmp/notary-result.json)
+  status=$(jq -r '.status' "$result_file")
   if [[ "$status" != "Accepted" ]]; then
     echo "  ✗ Notarization FAILED (status: $status)"
     echo "  Fetching full log…"
     local sub_id
-    sub_id=$(jq -r '.id' '/tmp/notary-result.json')
+    sub_id=$(jq -r '.id' "$result_file")
     if [[ -n "$sub_id" ]]; then
       xcrun notarytool log "$sub_id" \
         --apple-id "$APPLE_ID" \
