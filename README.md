@@ -44,6 +44,7 @@ vump alpha                 Start or increment alpha pre-release
 vump beta                  Start or increment beta pre-release
 vump rc                    Start or increment RC pre-release
 vump release               Drop pre-release suffix (1.2.3-rc.1 → 1.2.3)
+vump init                  Create an initial vump.toml interactively
 vump check <version>       Verify all tracked files match the given version
 ```
 
