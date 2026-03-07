@@ -133,6 +133,24 @@ After bumping:
 
 vump never runs `npm install` or `cargo build`.
 
+## GitHub Actions
+
+A composite action is included that runs `vump check` in CI. Add it to any tag-push workflow to abort the build if the pushed tag doesn't match the versions in your tracked files.
+
+```yaml
+- uses: okcodes/vump/.github/actions/check@main
+  with:
+    version: ${{ github.ref_name }}
+```
+
+| Input | Required | Default | Description |
+|---|---|---|---|
+| `version` | ✅ | — | Version to verify (`1.2.3` or `v1.2.3`) |
+| `config` | ❌ | `vump.toml` | Path to `vump.toml` relative to repo root |
+| `vump-version` | ❌ | `latest` | vump release to download |
+
+The action downloads the vump binary automatically — no setup step needed.
+
 ## Development
 
 ```sh
