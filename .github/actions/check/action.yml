@@ -29,5 +29,5 @@ runs:
         # cd to the directory containing vump.toml so it is found automatically.
         CONFIG_DIR=$(dirname "${{ github.workspace }}/${{ inputs.config }}")
         cd "$CONFIG_DIR"
-        vump check "${{ inputs.version }}"
+        "$VUMP_BIN" check "${{ inputs.version }}"
 
