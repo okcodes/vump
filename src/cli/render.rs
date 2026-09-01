@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use crate::app::bump::{BumpOutcome, BumpPlan};
 use crate::app::check::CheckReport;
 use crate::app::status::ProjectStatus;
+use crate::app::update::UpdateOutcome;
 use crate::cli::exit::Exit;
 
 /// Symbols used to mark pass and fail states.
@@ -320,6 +321,51 @@ pub fn init(files: &[String], json: bool) {
     }
     println!();
     println!("Review it, then run `vump` to bump.");
+}
+
+/// Renders the outcome of an `update`.
+pub fn update(outcome: &UpdateOutcome, json: bool) {
+    if json {
+        let (state, current, latest) = match outcome {
+            UpdateOutcome::UpToDate { current } => ("up_to_date", current, None),
+            UpdateOutcome::Available { current, latest } => ("available", current, Some(latest)),
+            UpdateOutcome::Installed {
+                previous,
+                installed,
+            } => ("installed", previous, Some(installed)),
+            UpdateOutcome::Ahead { current, latest } => ("ahead", current, Some(latest)),
+        };
+
+        print(&json!({
+            "command": "update",
+            "ok": true,
+            "state": state,
+            "current": current.to_string(),
+            "latest": latest.map(ToString::to_string),
+        }));
+        return;
+    }
+
+    let marks = Marks::detect();
+
+    match outcome {
+        UpdateOutcome::UpToDate { current } => {
+            println!("{} already on the newest release ({current})", marks.ok);
+        }
+        UpdateOutcome::Available { current, latest } => {
+            println!("{latest} is available; running {current}.");
+            println!("Run `vump update` to install it.");
+        }
+        UpdateOutcome::Installed {
+            previous,
+            installed,
+        } => {
+            println!("{} updated {previous} -> {installed}", marks.ok);
+        }
+        UpdateOutcome::Ahead { current, latest } => {
+            println!("{current} is newer than the newest release ({latest}); nothing to do.");
+        }
+    }
 }
 
 /// Renders a failure.

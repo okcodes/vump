@@ -12,7 +12,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use thiserror::Error;
 
-use crate::adapters::{GitCli, RealFileSystem, TerminalInteraction};
+use crate::adapters::{GitCli, GitHubReleases, RealFileSystem, TerminalInteraction};
 use crate::app::bump::{BumpError, GitFlags, GitIntent};
 use crate::app::{self, AppError};
 use crate::config::{Config, ConfigError};
@@ -103,6 +103,13 @@ enum Command {
         /// Overwrite an existing vump.toml.
         #[arg(long)]
         force: bool,
+    },
+
+    /// Replace this binary with the newest release.
+    Update {
+        /// Report whether a newer release exists without installing it.
+        #[arg(long)]
+        check: bool,
     },
 }
 
@@ -226,12 +233,17 @@ struct Context {
 fn execute(cli: &Cli) -> Result<Exit, CliError> {
     let cwd = std::env::current_dir().map_err(|e| CliError::WorkingDirectory(e.to_string()))?;
 
-    // init runs before configuration exists — creating it is the point — so it
-    // is dispatched ahead of discovery.
-    if let Some(Command::Init { force }) = &cli.command {
-        let written = app::init::init(&RealFileSystem, &cwd, *force)?;
-        render::init(&written, cli.json);
-        return Ok(Exit::Success);
+    // init and update operate on the installation rather than on a project, so
+    // they run before configuration is looked for. init exists precisely
+    // because there is none yet.
+    match &cli.command {
+        Some(Command::Init { force }) => {
+            let written = app::init::init(&RealFileSystem, &cwd, *force)?;
+            render::init(&written, cli.json);
+            return Ok(Exit::Success);
+        }
+        Some(Command::Update { check }) => return update(*check, cli.json),
+        _ => {}
     }
 
     let (root, config) = Config::discover(&cwd)?;
@@ -279,8 +291,36 @@ fn execute(cli: &Cli) -> Result<Exit, CliError> {
         Command::Check { version } => check(&ctx, version),
         Command::Status => status(&ctx),
         // Handled before configuration discovery.
-        Command::Init { .. } => Ok(Exit::Success),
+        Command::Init { .. } | Command::Update { .. } => Ok(Exit::Success),
     }
+}
+
+/// Reports on, and optionally installs, the newest release.
+fn update(check_only: bool, json: bool) -> Result<Exit, CliError> {
+    // The running binary's version comes from the manifest it was built from,
+    // which is the same value `check` verifies against the release tag.
+    let current = env!("CARGO_PKG_VERSION")
+        .parse()
+        .map_err(|e: semver::Error| CliError::InvalidVersionArgument {
+            text: env!("CARGO_PKG_VERSION").to_owned(),
+            detail: e.to_string(),
+        })?;
+
+    let outcome = app::update::update(
+        &GitHubReleases::new(),
+        &current,
+        (std::env::consts::OS, std::env::consts::ARCH),
+        check_only,
+    )?;
+
+    render::update(&outcome, json);
+
+    // `--check` is used in scripts to ask whether an update is pending, so the
+    // answer is carried by the exit status as well as by the output.
+    Ok(match outcome {
+        app::update::UpdateOutcome::Available { .. } if check_only => Exit::Failure,
+        _ => Exit::Success,
+    })
 }
 
 /// Guides a bump, asking only what has not already been decided.
@@ -557,6 +597,9 @@ enum CliError {
     #[error("{0}")]
     Init(#[from] app::init::InitError),
 
+    #[error("{0}")]
+    Update(#[from] app::update::UpdateError),
+
     #[error("{text:?} is not a valid version: {detail}")]
     InvalidVersionArgument { text: String, detail: String },
 
@@ -569,10 +612,13 @@ impl CliError {
     fn exit(&self) -> Exit {
         match self {
             Self::InvalidVersionArgument { .. } => Exit::Usage,
-            Self::WorkingDirectory(_) => Exit::Failure,
             Self::Config(_) => Exit::Config,
             Self::App(app) => app_exit(app),
             Self::Transition(_) => Exit::InvalidTransition,
+            // Updating touches the installation rather than a project, so
+            // nothing about it maps onto the project-shaped codes. Neither does
+            // failing to resolve the working directory.
+            Self::Update(_) | Self::WorkingDirectory(_) => Exit::Failure,
             Self::Init(init) => match init {
                 app::init::InitError::Filesystem(FsError::Io { .. }) => Exit::Failure,
                 app::init::InitError::AlreadyExists { .. }
