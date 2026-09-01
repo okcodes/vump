@@ -385,7 +385,8 @@ fn interactive(ctx: &Context) -> Result<Exit, CliError> {
 
     let vcs = GitCli::new(&ctx.root);
     let outcome = app::bump::apply(&ctx.fs, &vcs, &ctx.root, &plan)?;
-    render::bump(&plan, &outcome, ctx.json);
+    let stale = app::lockfile::detect(&ctx.fs, &ctx.root, &outcome.written);
+    render::bump(&plan, &outcome, &stale, ctx.json);
 
     Ok(if outcome.push_error.is_some() {
         Exit::Git
@@ -505,7 +506,8 @@ fn bump(
 
     let vcs = GitCli::new(&ctx.root);
     let outcome = app::bump::apply(&ctx.fs, &vcs, &ctx.root, &plan)?;
-    render::bump(&plan, &outcome, ctx.json);
+    let stale = app::lockfile::detect(&ctx.fs, &ctx.root, &outcome.written);
+    render::bump(&plan, &outcome, &stale, ctx.json);
 
     // A failed push leaves real, recoverable work behind, so it is reported as
     // a git failure rather than as a successful run.

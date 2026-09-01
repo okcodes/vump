@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 
 use crate::app::bump::{BumpOutcome, BumpPlan};
 use crate::app::check::CheckReport;
+use crate::app::lockfile::StaleLock;
 use crate::app::status::ProjectStatus;
 use crate::app::update::UpdateOutcome;
 use crate::cli::exit::Exit;
@@ -210,7 +211,7 @@ pub fn plan(plan: &BumpPlan, json: bool) {
 }
 
 /// Renders a completed bump.
-pub fn bump(plan: &BumpPlan, outcome: &BumpOutcome, json: bool) {
+pub fn bump(plan: &BumpPlan, outcome: &BumpOutcome, stale: &[StaleLock], json: bool) {
     if json {
         print(&json!({
             "command": "bump",
@@ -227,6 +228,7 @@ pub fn bump(plan: &BumpPlan, outcome: &BumpOutcome, json: bool) {
                 "pushed": outcome.pushed,
                 "push_error": outcome.push_error,
             },
+            "stale_locks": stale_json(stale),
         }));
         return;
     }
@@ -260,6 +262,41 @@ pub fn bump(plan: &BumpPlan, outcome: &BumpOutcome, json: bool) {
         println!("To push:");
         println!("  {}", push_command(plan.git.tag.as_deref()));
     }
+
+    describe_stale_locks(stale);
+}
+
+/// Reports lock files a bump has left disagreeing with their manifest.
+///
+/// Printed after the git summary because it is advisory: the bump succeeded,
+/// and this is the next thing to do.
+fn describe_stale_locks(stale: &[StaleLock]) {
+    if stale.is_empty() {
+        return;
+    }
+
+    println!();
+    let subject = if stale.len() == 1 {
+        "lock file is"
+    } else {
+        "lock files are"
+    };
+    println!("{} {subject} now out of date:", stale.len());
+    for lock in stale {
+        println!("  {}  ->  {}", lock.path, lock.refresh_with);
+    }
+}
+
+fn stale_json(stale: &[StaleLock]) -> Vec<Value> {
+    stale
+        .iter()
+        .map(|l| {
+            json!({
+                "path": l.path,
+                "refresh_with": l.refresh_with,
+            })
+        })
+        .collect()
 }
 
 fn push_command(tag: Option<&str>) -> String {

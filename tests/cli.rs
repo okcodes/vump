@@ -106,6 +106,7 @@ impl Run {
 }
 
 const SINGLE: &str = "files = [\"VERSION\"]\n";
+const SINGLE_PACKAGE: &str = "files = [\"package.json\"]\n";
 
 // ─── Exit codes ──────────────────────────────────────────────────────────────
 
@@ -358,6 +359,56 @@ fn no_git_overrides_configured_actions() {
         .output()
         .expect("cannot list tags");
     assert!(String::from_utf8_lossy(&tags.stdout).trim().is_empty());
+}
+
+#[test]
+fn a_bump_reports_lock_files_it_leaves_stale() {
+    // A stale Cargo.lock is not cosmetic: it fails a --locked build, which is
+    // what release pipelines run.
+    let fx = Fixture::new()
+        .write("vump.toml", "files = [\"crates/api/Cargo.toml\"]\n")
+        .write("crates/api/Cargo.toml", "[package]\nversion = \"1.0.0\"\n")
+        .write("Cargo.lock", "# workspace lock\n");
+
+    let run = fx.run(&["patch", "--no-git"]);
+    assert_eq!(run.code, 0, "{}", run.output());
+    assert!(run.stdout.contains("Cargo.lock"), "{}", run.stdout);
+    assert!(run.stdout.contains("cargo check"), "{}", run.stdout);
+
+    // The lock itself is never rewritten; vump does not run package managers.
+    assert_eq!(fx.read("Cargo.lock"), "# workspace lock\n");
+}
+
+#[test]
+fn stale_locks_appear_in_json_output() {
+    let fx = Fixture::new()
+        .write("vump.toml", SINGLE_PACKAGE)
+        .write("package.json", "{\"version\":\"1.0.0\"}")
+        .write("package-lock.json", "{}");
+
+    let value = fx.run(&["patch", "--no-git", "--json"]).json();
+    let locks = value["stale_locks"]
+        .as_array()
+        .expect("stale_locks must be an array");
+
+    assert_eq!(locks.len(), 1);
+    assert_eq!(locks[0]["path"], "package-lock.json");
+    assert_eq!(locks[0]["refresh_with"], "npm install");
+}
+
+#[test]
+fn a_bump_with_no_lock_files_reports_none() {
+    let fx = Fixture::new()
+        .write("vump.toml", SINGLE)
+        .write("VERSION", "1.0.0\n");
+
+    let value = fx.run(&["patch", "--no-git", "--json"]).json();
+    assert!(
+        value["stale_locks"]
+            .as_array()
+            .expect("stale_locks must be present")
+            .is_empty()
+    );
 }
 
 // ─── Initialization ──────────────────────────────────────────────────────────

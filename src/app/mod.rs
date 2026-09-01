@@ -7,6 +7,7 @@
 pub mod bump;
 pub mod check;
 pub mod init;
+pub mod lockfile;
 pub mod status;
 pub mod update;
 
