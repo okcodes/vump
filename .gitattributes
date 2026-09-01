@@ -1,19 +1,14 @@
 # Enforce LF line endings for all text files.
-# This ensures shell scripts and source files work correctly when checked
-# out on Windows and run inside Linux/macOS Docker containers.
+# Shell scripts and source files must not get CRLF on Windows checkout, since
+# the same tree is built and executed on Linux and macOS.
 
 * text=auto
 
-# Always LF — scripts and source code must not get CRLF on Windows checkout.
 *.sh        text eol=lf
-*.go        text eol=lf
+*.rs        text eol=lf
 *.toml      text eol=lf
+*.lock      text eol=lf
 *.yml       text eol=lf
 *.yaml      text eol=lf
 *.md        text eol=lf
-*.adoc      text eol=lf
 *.json      text eol=lf
-*.mod       text eol=lf
-*.sum       text eol=lf
-Makefile    text eol=lf
-

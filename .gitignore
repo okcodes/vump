@@ -1,11 +1,5 @@
-# Binaries / build output
+# Build output
+/target/
 dist/
-
-# Test binaries
-*.test
-
-# Go workspace file
-go.work
-go.work.sum
 
 .DS_Store
