@@ -214,7 +214,12 @@ vump update               Replace the running binary with the latest release
 | `--commit`          | bump commands   | Stage and commit the changed files             |
 | `--tag`             | bump commands   | Commit and tag (implies `--commit`)            |
 | `--push`            | bump commands   | Push commit and tag (implies `--commit`)       |
+| `--no-git`          | bump commands   | Perform no git actions, overriding configuration |
 | `--json`            | global          | Machine-readable output                        |
+
+`--no-git` is the single escape hatch from authoritative configuration, and it
+conflicts with the three flags above: asking for no git actions and for a
+commit in one invocation is a contradiction, rejected at parse time.
 
 Only files declared in configuration are staged. If commit, tag, or push is
 active, a dirty working tree is a hard failure — a version bump must not sweep
@@ -297,7 +302,12 @@ Rules that keep the boundaries real:
   scripted run even by accident.
 - **Self-update** replaces the running binary. On Unix an atomic rename works
   even while executing; on Windows the running executable must be renamed aside
-  first, then replaced.
+  first, then replaced. That platform difference is delegated to a library
+  rather than reimplemented. Downgrades are refused: a development build ahead
+  of the last release must never be overwritten by it.
+- **Release discovery** uses the endpoint that excludes pre-releases, so an
+  alpha never presents itself as an upgrade to someone on a stable build. This
+  pairs with the release workflow publishing pre-release tags as pre-releases.
 
 ### Dependency notes
 
