@@ -8,46 +8,106 @@ on:
 permissions:
   contents: write  # needed to create GitHub releases and upload assets
 
-jobs:
-  build:
-    name: Build
-    runs-on: ubuntu-latest
+env:
+  CARGO_TERM_COLOR: always
 
+jobs:
+  verify:
+    name: Verify tag and test
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
 
+      # Gate everything behind the tag matching the version recorded in source.
+      # An expensive build matrix must never run for a tag that disagrees with
+      # Cargo.toml.
       - name: Check release tag matches source version
-        # Uses the action defined in this repo itself.
         uses: ./.github/actions/check
         with:
           version: ${{ github.ref_name }}
 
-      - name: Run tests
-        run: |
-          chmod +x test.sh
-          ./test.sh
-
-      - name: Build all platform binaries
-        run: |
-          chmod +x build.sh
-          ./build.sh
-
-      # Only first release ever needed this as no release where to download binaries from.
-      # for the ./.github/actions/check action to work.
-      # - name: Verify tag matches source versions
-      #   # Uses the linux-amd64 binary just built above — no Go install needed.
-      #   run: ./dist/vump-linux-amd64 check "${{ github.ref_name }}"
-
-      # Uploaded as 'dist-unsigned' to make it explicit these have not been
-      # signed or notarized yet. Only the sign job produces the final assets.
-      - name: Upload unsigned binaries
-        uses: actions/upload-artifact@v7
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          name: dist-unsigned
-          path: dist/
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test
+
+  build:
+    name: Build ${{ matrix.asset }}
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash   # unify scripting across Linux, macOS and Windows runners
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux binaries are statically linked against musl so they run on any
+          # distribution regardless of its glibc version — these are downloaded
+          # onto arbitrary CI runners, including old and self-hosted images.
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            asset: vump-linux-amd64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            asset: vump-linux-arm64
+          # Both macOS slices are merged into a single universal binary by the
+          # release job; they are not published individually.
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset: vump-darwin-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            asset: vump-darwin-amd64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: vump-windows-amd64.exe
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            asset: vump-windows-arm64.exe
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install musl toolchain
+        if: endsWith(matrix.target, '-musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Stage binary
+        run: |
+          SRC="target/${{ matrix.target }}/release/vump"
+          [[ "${{ matrix.asset }}" == *.exe ]] && SRC="${SRC}.exe"
+          mkdir -p dist
+          cp "$SRC" "dist/${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
           retention-days: 1
 
-  sign:
+  release:
     name: Sign, Notarize & Release
     needs: build
     runs-on: macos-latest
@@ -58,14 +118,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Download unsigned binaries
+      - name: Download built binaries
         uses: actions/download-artifact@v8
         with:
-          name: dist-unsigned
           path: dist/
+          merge-multiple: true
 
+      # Artifact upload does not preserve the executable bit; lipo and codesign
+      # both require it.
       - name: Restore executable permissions
-        run: chmod +x dist/vump-darwin-amd64 dist/vump-darwin-arm64
+        run: chmod +x dist/vump-*
 
       - name: Import signing certificate
         env:
@@ -90,6 +152,8 @@ jobs:
           chmod +x notarize.sh
           ./notarize.sh
 
+      # The per-architecture macOS slices are intentionally not published: the
+      # universal binary supersedes them and is the only notarized artifact.
       - name: Create GitHub Release and upload binaries
         env:
           GH_TOKEN: ${{ github.token }}
