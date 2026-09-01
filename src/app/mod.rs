@@ -4,6 +4,7 @@
 //! complete operation. Use cases depend on port traits only, so they can be
 //! driven entirely from memory in tests.
 
+pub mod bump;
 pub mod check;
 pub mod status;
 

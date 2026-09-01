@@ -8,6 +8,7 @@ use std::io::IsTerminal;
 
 use serde_json::{Value, json};
 
+use crate::app::bump::{BumpOutcome, BumpPlan};
 use crate::app::check::CheckReport;
 use crate::app::status::ProjectStatus;
 use crate::cli::exit::Exit;
@@ -149,6 +150,125 @@ pub fn status(projects: &[ProjectStatus], json: bool) {
             }
         }
     }
+}
+
+/// Renders a plan that will not be carried out.
+pub fn plan(plan: &BumpPlan, json: bool) {
+    if json {
+        print(&json!({
+            "command": "plan",
+            "ok": true,
+            "dry_run": true,
+            "project": plan.project,
+            "current": plan.current.to_string(),
+            "next": plan.next.to_string(),
+            "changes": changes_json(plan),
+            "git": git_json(plan),
+        }));
+        return;
+    }
+
+    println!("{} -> {}  (dry run)", plan.current, plan.next);
+    println!();
+    for change in &plan.changes {
+        println!("  would write  {}", change.path);
+    }
+    describe_git_plan(plan);
+    println!();
+    println!("Nothing was written.");
+}
+
+/// Renders a completed bump.
+pub fn bump(plan: &BumpPlan, outcome: &BumpOutcome, json: bool) {
+    if json {
+        print(&json!({
+            "command": "bump",
+            "ok": outcome.push_error.is_none(),
+            "project": plan.project,
+            "previous": plan.current.to_string(),
+            "version": plan.next.to_string(),
+            "changes": changes_json(plan),
+            "git": {
+                "committed": outcome.committed,
+                "commit_message": plan.git.commit,
+                "tagged": outcome.tagged,
+                "tag": plan.git.tag,
+                "pushed": outcome.pushed,
+                "push_error": outcome.push_error,
+            },
+        }));
+        return;
+    }
+
+    let marks = Marks::detect();
+
+    println!("{} {} -> {}", marks.ok, plan.current, plan.next);
+    for path in &outcome.written {
+        println!("  {path}");
+    }
+
+    if let Some(message) = plan.git.commit.as_deref().filter(|_| outcome.committed) {
+        println!("{} committed  {message}", marks.ok);
+    }
+    if let Some(tag) = plan.git.tag.as_deref().filter(|_| outcome.tagged) {
+        println!("{} tagged     {tag}", marks.ok);
+    }
+
+    if let Some(detail) = outcome.push_error.as_deref() {
+        // The commit and tag survived; only the push did not. Saying what
+        // remains to be done is more useful than reporting a failed run.
+        eprintln!();
+        eprintln!("{} push failed: {detail}", marks.fail);
+        eprintln!();
+        eprintln!("Everything else succeeded. To finish:");
+        eprintln!("  {}", push_command(plan.git.tag.as_deref()));
+    } else if outcome.pushed {
+        println!("{} pushed", marks.ok);
+    } else if outcome.committed {
+        println!();
+        println!("To push:");
+        println!("  {}", push_command(plan.git.tag.as_deref()));
+    }
+}
+
+fn push_command(tag: Option<&str>) -> String {
+    match tag {
+        Some(tag) => format!("git push && git push origin {tag}"),
+        None => "git push".to_owned(),
+    }
+}
+
+fn describe_git_plan(plan: &BumpPlan) {
+    if let Some(message) = plan.git.commit.as_deref() {
+        println!("  would commit  {message}");
+    }
+    if let Some(tag) = plan.git.tag.as_deref() {
+        println!("  would tag     {tag}");
+    }
+    if plan.git.push {
+        println!("  would push");
+    }
+}
+
+fn changes_json(plan: &BumpPlan) -> Vec<Value> {
+    plan.changes
+        .iter()
+        .map(|c| {
+            json!({
+                "path": c.path,
+                "from": c.from.to_string(),
+                "to": c.to.to_string(),
+            })
+        })
+        .collect()
+}
+
+fn git_json(plan: &BumpPlan) -> Value {
+    json!({
+        "commit_message": plan.git.commit,
+        "tag": plan.git.tag,
+        "push": plan.git.push,
+    })
 }
 
 /// Renders a failure.

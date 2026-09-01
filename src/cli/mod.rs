@@ -12,9 +12,11 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use thiserror::Error;
 
-use crate::adapters::RealFileSystem;
+use crate::adapters::{GitCli, RealFileSystem};
+use crate::app::bump::{BumpError, GitFlags, GitIntent};
 use crate::app::{self, AppError};
 use crate::config::{Config, ConfigError};
+use crate::domain::{PreLabel, StableBump, Transition};
 use crate::ports::FsError;
 
 use exit::Exit;
@@ -50,8 +52,33 @@ pub struct Cli {
 ///
 /// Every bump type is a real subcommand rather than a matched string, so that
 /// help text, validation, and typo diagnostics come from one source.
+///
+/// Naming a bump subcommand is what makes a run non-interactive. Anything a
+/// subcommand would otherwise have to ask about is a required flag or an
+/// error, never a prompt.
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Bump the patch component (1.2.3 -> 1.2.4).
+    Patch(BumpArgs),
+
+    /// Bump the minor component (1.2.3 -> 1.3.0).
+    Minor(BumpArgs),
+
+    /// Bump the major component (1.2.3 -> 2.0.0).
+    Major(BumpArgs),
+
+    /// Start or advance an alpha pre-release.
+    Alpha(PreReleaseArgs),
+
+    /// Start or advance a beta pre-release.
+    Beta(PreReleaseArgs),
+
+    /// Start or advance a release candidate.
+    Rc(PreReleaseArgs),
+
+    /// Drop the pre-release suffix (1.2.3-rc.1 -> 1.2.3).
+    Release(BumpArgs),
+
     /// Verify that tracked files record the given version.
     ///
     /// Intended for CI: run it against a pushed tag to abort before any build
@@ -64,6 +91,99 @@ enum Command {
 
     /// Report the versions currently recorded, and whether they agree.
     Status,
+}
+
+/// Options shared by every bump.
+#[derive(Debug, clap::Args)]
+struct BumpArgs {
+    /// Report what would change without writing anything.
+    #[arg(long)]
+    dry_run: bool,
+
+    #[command(flatten)]
+    git: GitArgs,
+}
+
+/// Options for starting or advancing a pre-release.
+#[derive(Debug, clap::Args)]
+struct PreReleaseArgs {
+    /// Which release the pre-release leads to.
+    ///
+    /// Required when the current version is stable, because a pre-release must
+    /// know which future release it precedes. Ignored when already on one.
+    #[arg(long, value_name = "BUMP")]
+    from: Option<StableBumpArg>,
+
+    /// Report what would change without writing anything.
+    #[arg(long)]
+    dry_run: bool,
+
+    #[command(flatten)]
+    git: GitArgs,
+}
+
+/// Git side-effects selectable on the command line.
+///
+/// The usual objection to several booleans in one struct is unreadable call
+/// sites, which does not apply here: every field is a distinct, independently
+/// meaningful flag, named at the point of use both on the command line and in
+/// code.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, clap::Args)]
+struct GitArgs {
+    /// Stage and commit the changed files.
+    #[arg(long)]
+    commit: bool,
+
+    /// Commit and tag. Implies --commit.
+    #[arg(long)]
+    tag: bool,
+
+    /// Push the commit and tag. Implies --commit.
+    #[arg(long)]
+    push: bool,
+
+    /// Perform no git actions, overriding vump.toml for this run.
+    #[arg(long, conflicts_with_all = ["commit", "tag", "push"])]
+    no_git: bool,
+}
+
+/// The stable bump a pre-release is based on.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum StableBumpArg {
+    /// 1.2.3 -> 1.2.4
+    Patch,
+    /// 1.2.3 -> 1.3.0
+    Minor,
+    /// 1.2.3 -> 2.0.0
+    Major,
+}
+
+impl From<StableBumpArg> for StableBump {
+    fn from(arg: StableBumpArg) -> Self {
+        match arg {
+            StableBumpArg::Patch => Self::Patch,
+            StableBumpArg::Minor => Self::Minor,
+            StableBumpArg::Major => Self::Major,
+        }
+    }
+}
+
+impl GitArgs {
+    /// Resolves configuration and flags into the side-effects to perform.
+    fn intent(&self, settings: &crate::config::GitSettings) -> GitIntent {
+        if self.no_git {
+            return GitIntent::default();
+        }
+        GitIntent::resolve(
+            settings,
+            GitFlags {
+                commit: self.commit,
+                tag: self.tag,
+                push: self.push,
+            },
+        )
+    }
 }
 
 /// Parses arguments, runs the requested command, and returns a process status.
@@ -81,58 +201,153 @@ pub fn run() -> ExitCode {
     }
 }
 
+/// Everything a command needs from the environment, resolved once.
+struct Context {
+    fs: RealFileSystem,
+    root: std::path::PathBuf,
+    config: Config,
+    json: bool,
+    project: Option<String>,
+}
+
 fn execute(cli: &Cli) -> Result<Exit, CliError> {
     let cwd = std::env::current_dir().map_err(|e| CliError::WorkingDirectory(e.to_string()))?;
-    let fs = RealFileSystem;
     let (root, config) = Config::discover(&cwd)?;
 
+    let ctx = Context {
+        fs: RealFileSystem,
+        root,
+        config,
+        json: cli.json,
+        project: cli.project.clone(),
+    };
+
+    let pre = |label, args: &PreReleaseArgs| Transition::PreRelease {
+        label,
+        from: args.from.map(Into::into),
+    };
+
     match &cli.command {
-        Command::Check { version } => {
-            let expected = app::check::parse_expected(version).map_err(|e| {
-                CliError::InvalidVersionArgument {
-                    text: version.clone(),
-                    detail: e.to_string(),
-                }
-            })?;
+        Command::Patch(a) => bump(
+            &ctx,
+            Transition::Stable(StableBump::Patch),
+            a.dry_run,
+            &a.git,
+        ),
+        Command::Minor(a) => bump(
+            &ctx,
+            Transition::Stable(StableBump::Minor),
+            a.dry_run,
+            &a.git,
+        ),
+        Command::Major(a) => bump(
+            &ctx,
+            Transition::Stable(StableBump::Major),
+            a.dry_run,
+            &a.git,
+        ),
+        Command::Release(a) => bump(&ctx, Transition::Release, a.dry_run, &a.git),
+        Command::Alpha(a) => bump(&ctx, pre(PreLabel::Alpha, a), a.dry_run, &a.git),
+        Command::Beta(a) => bump(&ctx, pre(PreLabel::Beta, a), a.dry_run, &a.git),
+        Command::Rc(a) => bump(&ctx, pre(PreLabel::Rc, a), a.dry_run, &a.git),
+        Command::Check { version } => check(&ctx, version),
+        Command::Status => status(&ctx),
+    }
+}
 
-            let project = config.select(cli.project.as_deref())?;
-            let report = app::check::check(&fs, &root, project, expected)?;
+fn bump(
+    ctx: &Context,
+    transition: Transition,
+    dry_run: bool,
+    git_args: &GitArgs,
+) -> Result<Exit, CliError> {
+    let project = ctx.config.select(ctx.project.as_deref())?;
+    let intent = git_args.intent(&ctx.config.git);
 
-            render::check(&report, cli.json);
+    let plan = app::bump::plan(
+        &ctx.fs,
+        &ctx.root,
+        project,
+        transition,
+        &ctx.config.git,
+        intent,
+    )?;
 
-            Ok(if report.is_satisfied() {
-                Exit::Success
-            } else {
-                Exit::VersionMismatch
-            })
-        }
+    if dry_run {
+        render::plan(&plan, ctx.json);
+        return Ok(Exit::Success);
+    }
 
-        Command::Status => {
-            // Selecting a project narrows the report; without one, every
-            // declared project is reported.
-            let scoped;
-            let target = match cli.project.as_deref() {
-                Some(name) => {
-                    scoped = Config {
-                        git: config.git.clone(),
-                        projects: vec![config.select(Some(name))?.clone()],
-                    };
-                    &scoped
-                }
-                None => &config,
+    let vcs = GitCli::new(&ctx.root);
+    let outcome = app::bump::apply(&ctx.fs, &vcs, &ctx.root, &plan)?;
+    render::bump(&plan, &outcome, ctx.json);
+
+    // A failed push leaves real, recoverable work behind, so it is reported as
+    // a git failure rather than as a successful run.
+    Ok(if outcome.push_error.is_some() {
+        Exit::Git
+    } else {
+        Exit::Success
+    })
+}
+
+fn check(ctx: &Context, version: &str) -> Result<Exit, CliError> {
+    let expected =
+        app::check::parse_expected(version).map_err(|e| CliError::InvalidVersionArgument {
+            text: version.to_owned(),
+            detail: e.to_string(),
+        })?;
+
+    let project = ctx.config.select(ctx.project.as_deref())?;
+    let report = app::check::check(&ctx.fs, &ctx.root, project, expected)?;
+
+    render::check(&report, ctx.json);
+
+    Ok(if report.is_satisfied() {
+        Exit::Success
+    } else {
+        Exit::VersionMismatch
+    })
+}
+
+fn status(ctx: &Context) -> Result<Exit, CliError> {
+    // Selecting a project narrows the report; without one, every declared
+    // project is reported.
+    let scoped;
+    let target = match ctx.project.as_deref() {
+        Some(name) => {
+            scoped = Config {
+                git: ctx.config.git.clone(),
+                projects: vec![ctx.config.select(Some(name))?.clone()],
             };
-
-            let statuses = app::status::status(&fs, &root, target)?;
-            render::status(&statuses, cli.json);
-
-            Ok(
-                if statuses.iter().all(app::status::ProjectStatus::is_in_sync) {
-                    Exit::Success
-                } else {
-                    Exit::OutOfSync
-                },
-            )
+            &scoped
         }
+        None => &ctx.config,
+    };
+
+    let statuses = app::status::status(&ctx.fs, &ctx.root, target)?;
+    render::status(&statuses, ctx.json);
+
+    Ok(
+        if statuses.iter().all(app::status::ProjectStatus::is_in_sync) {
+            Exit::Success
+        } else {
+            Exit::OutOfSync
+        },
+    )
+}
+
+/// Maps a use-case failure to its documented exit code.
+///
+/// An unreadable file is an environment failure; every other way a declared
+/// file fails to yield a version means configuration points at something
+/// unusable.
+fn app_exit(error: &AppError) -> Exit {
+    match error {
+        AppError::Filesystem(FsError::Io { .. }) => Exit::Failure,
+        AppError::MissingFile { .. }
+        | AppError::Filesystem(FsError::NotFound { .. })
+        | AppError::VersionFile(_) => Exit::Config,
     }
 }
 
@@ -144,6 +359,9 @@ enum CliError {
 
     #[error("{0}")]
     App(#[from] AppError),
+
+    #[error("{0}")]
+    Bump(#[from] BumpError),
 
     #[error("{text:?} is not a valid version: {detail}")]
     InvalidVersionArgument { text: String, detail: String },
@@ -159,14 +377,13 @@ impl CliError {
             Self::InvalidVersionArgument { .. } => Exit::Usage,
             Self::WorkingDirectory(_) => Exit::Failure,
             Self::Config(_) => Exit::Config,
-            Self::App(app) => match app {
-                // An unreadable file is an environment failure; every other way
-                // a declared file fails to yield a version means configuration
-                // points at something unusable.
-                AppError::Filesystem(FsError::Io { .. }) => Exit::Failure,
-                AppError::MissingFile { .. }
-                | AppError::Filesystem(FsError::NotFound { .. })
-                | AppError::VersionFile(_) => Exit::Config,
+            Self::App(app) => app_exit(app),
+            Self::Bump(bump) => match bump {
+                BumpError::App(app) => app_exit(app),
+                BumpError::Transition(_) => Exit::InvalidTransition,
+                BumpError::OutOfSync { .. } => Exit::OutOfSync,
+                BumpError::DirtyTree { .. } => Exit::DirtyTree,
+                BumpError::Vcs(_) => Exit::Git,
             },
         }
     }
