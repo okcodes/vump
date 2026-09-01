@@ -17,6 +17,8 @@ use crate::app::{AppError, read_project_versions, resolve};
 use crate::config::{GitSettings, Project};
 use crate::domain::version_file::Format;
 use crate::domain::{Transition, TransitionError, apply as transition_apply};
+
+pub use crate::domain::bump::valid_transitions as valid_transitions_for;
 use crate::ports::{FileSystem, Vcs, VcsError};
 
 /// A single file's version change.
@@ -188,30 +190,57 @@ pub fn plan(
     settings: &GitSettings,
     intent: GitIntent,
 ) -> Result<BumpPlan, BumpError> {
+    plan_from(fs, root, project, None, transition, settings, intent)
+}
+
+/// Decides what a bump would change, treating `base` as the current version.
+///
+/// Passing a `base` skips the requirement that tracked files already agree,
+/// which is how an interactive run repairs a disagreement the person has just
+/// been shown and resolved. Passing `None` requires agreement, as [`plan`]
+/// does.
+///
+/// # Errors
+///
+/// Returns a [`BumpError`] when files cannot be read, disagree with no `base`
+/// given, or the transition is not meaningful.
+pub fn plan_from(
+    fs: &dyn FileSystem,
+    root: &Path,
+    project: &Project,
+    base: Option<Version>,
+    transition: Transition,
+    settings: &GitSettings,
+    intent: GitIntent,
+) -> Result<BumpPlan, BumpError> {
     let files = read_project_versions(fs, root, project)?;
 
-    let mut distinct: Vec<Version> = Vec::new();
-    for file in &files {
-        if !distinct.contains(&file.version) {
-            distinct.push(file.version.clone());
+    let current = if let Some(base) = base {
+        base
+    } else {
+        let mut distinct: Vec<Version> = Vec::new();
+        for file in &files {
+            if !distinct.contains(&file.version) {
+                distinct.push(file.version.clone());
+            }
         }
-    }
 
-    if distinct.len() > 1 {
-        return Err(BumpError::OutOfSync {
-            found: files
-                .iter()
-                .map(|f| (f.path.clone(), f.version.clone()))
-                .collect(),
-        });
-    }
+        if distinct.len() > 1 {
+            return Err(BumpError::OutOfSync {
+                found: files
+                    .iter()
+                    .map(|f| (f.path.clone(), f.version.clone()))
+                    .collect(),
+            });
+        }
 
-    // `read_project_versions` returns at least one entry, because configuration
-    // rejects a project with no files.
-    let current = distinct
-        .into_iter()
-        .next()
-        .ok_or(BumpError::OutOfSync { found: Vec::new() })?;
+        // `read_project_versions` returns at least one entry, because
+        // configuration rejects a project with no files.
+        distinct
+            .into_iter()
+            .next()
+            .ok_or(BumpError::OutOfSync { found: Vec::new() })?
+    };
 
     let next = transition_apply(&current, transition)?;
 

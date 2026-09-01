@@ -29,6 +29,92 @@ pub trait FileSystem {
     fn is_file(&self, path: &Path) -> bool;
 }
 
+/// Questions a run may need to put to a person.
+///
+/// Only the interactive entry point uses this. Naming a subcommand selects an
+/// implementation that cannot ask anything, which is how the non-interactive
+/// guarantee is enforced by construction rather than by discipline.
+pub trait Interaction {
+    /// Asks which project to operate on.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InteractionError`] when the question cannot be asked or is
+    /// declined.
+    fn choose_project(&self, names: &[String]) -> Result<String, InteractionError>;
+
+    /// Asks which version to treat as current when tracked files disagree.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InteractionError`] when the question cannot be asked or is
+    /// declined.
+    fn choose_base(&self, candidates: &[(String, String)]) -> Result<String, InteractionError>;
+
+    /// Asks which transition to apply, given those valid from here.
+    ///
+    /// `options` pairs each choice with the version it would produce, and
+    /// contains only transitions that will succeed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InteractionError`] when the question cannot be asked or is
+    /// declined.
+    fn choose_transition(
+        &self,
+        current: &str,
+        options: &[(String, String)],
+    ) -> Result<usize, InteractionError>;
+
+    /// Asks which git side-effects to perform.
+    ///
+    /// Asked only when configuration has not already decided.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InteractionError`] when the question cannot be asked or is
+    /// declined.
+    fn choose_git(&self) -> Result<GitChoice, InteractionError>;
+
+    /// Asks for final approval of a rendered summary.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InteractionError`] when the question cannot be asked or is
+    /// declined.
+    fn confirm(&self, summary: &str) -> Result<bool, InteractionError>;
+}
+
+/// Git side-effects offered as a single question.
+///
+/// Combining them avoids asking twice for what is really one decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitChoice {
+    /// Write the files and stop.
+    None,
+    /// Commit the change.
+    Commit,
+    /// Commit and tag.
+    Tag,
+    /// Commit, tag and push.
+    TagAndPush,
+}
+
+/// Why a question could not be answered.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum InteractionError {
+    /// The person declined, by cancelling the prompt.
+    #[error("cancelled")]
+    Cancelled,
+
+    /// There is nobody to ask.
+    #[error("cannot prompt: {detail}")]
+    Unavailable {
+        /// Why prompting is impossible, for example no terminal is attached.
+        detail: String,
+    },
+}
+
 /// Version control operations required by use cases.
 ///
 /// Implementations act on one repository, fixed at construction, so that no

@@ -152,6 +152,36 @@ pub fn status(projects: &[ProjectStatus], json: bool) {
     }
 }
 
+/// Renders a plan as a block of text for a confirmation prompt.
+#[must_use]
+pub fn summary(plan: &BumpPlan) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::new();
+    let _ = writeln!(out);
+    if let Some(project) = plan.project.as_deref() {
+        let _ = writeln!(out, "  Project:  {project}");
+    }
+    let _ = writeln!(out, "  Bumping:  {}  ->  {}", plan.current, plan.next);
+
+    for change in &plan.changes {
+        let _ = writeln!(out, "  File:     {}", change.path);
+    }
+    if let Some(message) = plan.git.commit.as_deref() {
+        let _ = writeln!(out, "  Commit:   {message}");
+    }
+    if let Some(tag) = plan.git.tag.as_deref() {
+        let _ = writeln!(out, "  Tag:      {tag}");
+    }
+    let _ = writeln!(
+        out,
+        "  Push:     {}",
+        if plan.git.push { "yes" } else { "no" }
+    );
+
+    out
+}
+
 /// Renders a plan that will not be carried out.
 pub fn plan(plan: &BumpPlan, json: bool) {
     if json {

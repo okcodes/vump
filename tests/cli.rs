@@ -234,6 +234,20 @@ fn no_subcommand_ever_waits_for_input() {
     assert_eq!(fx.run(&["minor", "--no-git"]).code, 7);
 }
 
+#[test]
+fn the_interactive_path_refuses_without_a_terminal_instead_of_hanging() {
+    let fx = Fixture::new()
+        .write("vump.toml", SINGLE)
+        .write("VERSION", "1.2.3\n");
+
+    // Bare vump is the interactive entry point. With no terminal attached it
+    // must say so and stop, never block waiting for input that cannot arrive.
+    let run = fx.run(&[]);
+    assert_eq!(run.code, 2, "{}", run.output());
+    assert!(run.stderr.contains("terminal"), "{}", run.stderr);
+    assert_eq!(fx.read("VERSION"), "1.2.3\n");
+}
+
 // ─── Bumping ─────────────────────────────────────────────────────────────────
 
 #[test]

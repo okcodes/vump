@@ -12,12 +12,12 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use thiserror::Error;
 
-use crate::adapters::{GitCli, RealFileSystem};
+use crate::adapters::{GitCli, RealFileSystem, TerminalInteraction};
 use crate::app::bump::{BumpError, GitFlags, GitIntent};
 use crate::app::{self, AppError};
 use crate::config::{Config, ConfigError};
-use crate::domain::{PreLabel, StableBump, Transition};
-use crate::ports::FsError;
+use crate::domain::{PreLabel, StableBump, Transition, TransitionError};
+use crate::ports::{FsError, GitChoice, Interaction, InteractionError};
 
 use exit::Exit;
 
@@ -32,12 +32,14 @@ use exit::Exit;
     version,
     about = "Keep semver version numbers in sync across a repository",
     long_about = "Keep semver version numbers in sync across the files of a repository, \
-                  and verify in CI that a released tag matches what is recorded in source.",
-    arg_required_else_help = true
+                  and verify in CI that a released tag matches what is recorded in source.\n\n\
+                  Run without a subcommand to be guided through a bump. Naming a subcommand \
+                  runs without prompting, always."
 )]
 pub struct Cli {
+    /// Omitted to run interactively.
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 
     /// Emit machine-readable JSON instead of human-readable text.
     #[arg(long, global = true)]
@@ -227,7 +229,11 @@ fn execute(cli: &Cli) -> Result<Exit, CliError> {
         from: args.from.map(Into::into),
     };
 
-    match &cli.command {
+    let Some(command) = &cli.command else {
+        return interactive(&ctx);
+    };
+
+    match command {
         Command::Patch(a) => bump(
             &ctx,
             Transition::Stable(StableBump::Patch),
@@ -252,6 +258,163 @@ fn execute(cli: &Cli) -> Result<Exit, CliError> {
         Command::Rc(a) => bump(&ctx, pre(PreLabel::Rc, a), a.dry_run, &a.git),
         Command::Check { version } => check(&ctx, version),
         Command::Status => status(&ctx),
+    }
+}
+
+/// Guides a bump, asking only what has not already been decided.
+///
+/// Configuration is consulted first: a repository that declares its git
+/// settings is never asked about them again. That leaves two questions in the
+/// common case — which bump, and whether to proceed.
+fn interactive(ctx: &Context) -> Result<Exit, CliError> {
+    let ask = TerminalInteraction::new();
+
+    // Which project.
+    let project = match ctx.project.as_deref() {
+        Some(name) => ctx.config.select(Some(name))?.clone(),
+        None if ctx.config.projects.len() == 1 => ctx.config.projects[0].clone(),
+        None => {
+            let names: Vec<String> = ctx
+                .config
+                .projects
+                .iter()
+                .filter_map(|p| p.name.clone())
+                .collect();
+            let chosen = ask.choose_project(&names)?;
+            ctx.config.select(Some(&chosen))?.clone()
+        }
+    };
+
+    // What the current version is, resolving a disagreement if there is one.
+    let files = app::read_project_versions(&ctx.fs, &ctx.root, &project)?;
+    let base = resolve_base(&ask, &files)?;
+
+    // Which transition, offering only those that would succeed.
+    let offered = app::bump::valid_transitions_for(&base)?;
+    let labelled: Vec<(String, String)> = offered
+        .iter()
+        .map(|(t, next)| (describe_transition(*t), next.to_string()))
+        .collect();
+    let index = ask.choose_transition(&base.to_string(), &labelled)?;
+    let (transition, _) = offered
+        .get(index)
+        .ok_or(CliError::Interaction(InteractionError::Cancelled))?;
+
+    // Which git actions, asked only when configuration has not decided.
+    let intent = match configured_intent(&ctx.config.git) {
+        Some(intent) => intent,
+        None => intent_from(ask.choose_git()?),
+    };
+
+    let plan = app::bump::plan_from(
+        &ctx.fs,
+        &ctx.root,
+        &project,
+        Some(base),
+        *transition,
+        &ctx.config.git,
+        intent,
+    )?;
+
+    if !ask.confirm(&render::summary(&plan))? {
+        println!("Nothing was changed.");
+        return Ok(Exit::Success);
+    }
+
+    let vcs = GitCli::new(&ctx.root);
+    let outcome = app::bump::apply(&ctx.fs, &vcs, &ctx.root, &plan)?;
+    render::bump(&plan, &outcome, ctx.json);
+
+    Ok(if outcome.push_error.is_some() {
+        Exit::Git
+    } else {
+        Exit::Success
+    })
+}
+
+/// Determines the version to bump from, asking only if the files disagree.
+fn resolve_base(
+    ask: &dyn Interaction,
+    files: &[app::FileVersion],
+) -> Result<semver::Version, CliError> {
+    let mut distinct: Vec<semver::Version> = Vec::new();
+    for file in files {
+        if !distinct.contains(&file.version) {
+            distinct.push(file.version.clone());
+        }
+    }
+
+    match distinct.as_slice() {
+        [only] => Ok(only.clone()),
+        [] => Err(CliError::Bump(BumpError::OutOfSync { found: Vec::new() })),
+        _ => {
+            // Each candidate is shown with the files recording it, so the
+            // choice is made on evidence rather than on a bare version string.
+            let candidates: Vec<(String, String)> = distinct
+                .iter()
+                .map(|version| {
+                    let where_seen = files
+                        .iter()
+                        .filter(|f| f.version == *version)
+                        .map(|f| f.path.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    (version.to_string(), where_seen)
+                })
+                .collect();
+
+            let chosen = ask.choose_base(&candidates)?;
+            chosen
+                .parse()
+                .map_err(|_| CliError::Interaction(InteractionError::Cancelled))
+        }
+    }
+}
+
+/// The git side-effects configuration has already decided, if any.
+///
+/// Returning `None` means configuration is silent on the matter, which is the
+/// only case where asking is warranted.
+fn configured_intent(settings: &crate::config::GitSettings) -> Option<GitIntent> {
+    if settings.commit || settings.tag || settings.push {
+        Some(GitIntent::resolve(settings, GitFlags::default()))
+    } else {
+        None
+    }
+}
+
+fn intent_from(choice: GitChoice) -> GitIntent {
+    match choice {
+        GitChoice::None => GitIntent::default(),
+        GitChoice::Commit => GitIntent {
+            commit: true,
+            tag: false,
+            push: false,
+        },
+        GitChoice::Tag => GitIntent {
+            commit: true,
+            tag: true,
+            push: false,
+        },
+        GitChoice::TagAndPush => GitIntent {
+            commit: true,
+            tag: true,
+            push: true,
+        },
+    }
+}
+
+/// Names a transition the way the corresponding subcommand is spelled, so the
+/// menu teaches the non-interactive equivalent.
+fn describe_transition(transition: Transition) -> String {
+    match transition {
+        Transition::Stable(bump) => bump.to_string(),
+        Transition::PreRelease {
+            label,
+            from: Some(base),
+        } => format!("{label} --from {base}"),
+        Transition::PreRelease { label, from: None } => label.to_string(),
+        Transition::Release => "release".to_owned(),
     }
 }
 
@@ -363,6 +526,12 @@ enum CliError {
     #[error("{0}")]
     Bump(#[from] BumpError),
 
+    #[error("{0}")]
+    Transition(#[from] TransitionError),
+
+    #[error("{0}")]
+    Interaction(#[from] InteractionError),
+
     #[error("{text:?} is not a valid version: {detail}")]
     InvalidVersionArgument { text: String, detail: String },
 
@@ -378,6 +547,15 @@ impl CliError {
             Self::WorkingDirectory(_) => Exit::Failure,
             Self::Config(_) => Exit::Config,
             Self::App(app) => app_exit(app),
+            Self::Transition(_) => Exit::InvalidTransition,
+            Self::Interaction(interaction) => match interaction {
+                // Declining is a decision, not a fault, but nothing was done,
+                // so it must not look like a successful run either.
+                InteractionError::Cancelled => Exit::Failure,
+                // Reaching a prompt with nobody to answer it means the command
+                // was invoked the wrong way for its environment.
+                InteractionError::Unavailable { .. } => Exit::Usage,
+            },
             Self::Bump(bump) => match bump {
                 BumpError::App(app) => app_exit(app),
                 BumpError::Transition(_) => Exit::InvalidTransition,
@@ -404,7 +582,38 @@ mod tests {
     #[test]
     fn check_accepts_a_version_argument() {
         let cli = Cli::try_parse_from(["vump", "check", "v1.2.3"]).unwrap();
-        assert!(matches!(cli.command, Command::Check { version } if version == "v1.2.3"));
+        assert!(matches!(
+            cli.command,
+            Some(Command::Check { version }) if version == "v1.2.3"
+        ));
+    }
+
+    #[test]
+    fn omitting_a_subcommand_selects_the_interactive_path() {
+        let cli = Cli::try_parse_from(["vump"]).expect("bare vump must parse");
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn every_bump_subcommand_is_reachable() {
+        for name in ["patch", "minor", "major", "alpha", "beta", "rc", "release"] {
+            Cli::try_parse_from(["vump", name])
+                .unwrap_or_else(|e| panic!("{name} must be a subcommand: {e}"));
+        }
+    }
+
+    #[test]
+    fn no_git_cannot_be_combined_with_a_git_action() {
+        // Asking for no git actions and for a commit in the same breath is a
+        // contradiction, caught at parse time rather than silently resolved.
+        assert!(Cli::try_parse_from(["vump", "patch", "--no-git", "--commit"]).is_err());
+        assert!(Cli::try_parse_from(["vump", "patch", "--no-git", "--tag"]).is_err());
+    }
+
+    #[test]
+    fn from_only_accepts_stable_bumps() {
+        assert!(Cli::try_parse_from(["vump", "alpha", "--from", "minor"]).is_ok());
+        assert!(Cli::try_parse_from(["vump", "alpha", "--from", "beta"]).is_err());
     }
 
     #[test]

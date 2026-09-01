@@ -224,6 +224,56 @@ pub fn apply(current: &Version, transition: Transition) -> Result<Version, Trans
     }
 }
 
+/// Every transition that is meaningful from `current`, with its result.
+///
+/// This is what an interactive menu offers: only operations that would succeed
+/// are listed. Showing an impossible choice annotated with why it will fail
+/// asks the reader to do work the tool has already done.
+///
+/// Ordering is by increasing disruption — the ordinary bumps first, then
+/// pre-releases, then finalizing — so the common choice is nearest the top.
+///
+/// # Errors
+///
+/// Returns a [`TransitionError`] when `current` itself cannot be interpreted,
+/// which is the one case where no transition is offerable.
+pub fn valid_transitions(current: &Version) -> Result<Vec<(Transition, Version)>, TransitionError> {
+    // Rejects an unrecognized pre-release up front rather than silently
+    // returning an empty menu.
+    let state = PreState::read(current)?;
+
+    let mut candidates = Vec::new();
+
+    match state {
+        PreState::Stable => {
+            for bump in [StableBump::Patch, StableBump::Minor, StableBump::Major] {
+                candidates.push(Transition::Stable(bump));
+            }
+            // A pre-release from a stable version must name the release it
+            // precedes, so each channel is offered once per base.
+            for label in [PreLabel::Alpha, PreLabel::Beta, PreLabel::Rc] {
+                for bump in [StableBump::Patch, StableBump::Minor, StableBump::Major] {
+                    candidates.push(Transition::PreRelease {
+                        label,
+                        from: Some(bump),
+                    });
+                }
+            }
+        }
+        PreState::Pre { .. } => {
+            for label in [PreLabel::Alpha, PreLabel::Beta, PreLabel::Rc] {
+                candidates.push(Transition::PreRelease { label, from: None });
+            }
+            candidates.push(Transition::Release);
+        }
+    }
+
+    Ok(candidates
+        .into_iter()
+        .filter_map(|t| apply(current, t).ok().map(|next| (t, next)))
+        .collect())
+}
+
 /// Whether a version is stable, and if not, how its pre-release reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PreState {
@@ -465,6 +515,66 @@ mod tests {
             .expect("bumping a version with build metadata should succeed");
         assert_eq!(result, v("1.2.4"));
         assert!(result.build.is_empty());
+    }
+
+    #[test]
+    fn a_stable_version_offers_bumps_and_every_pre_release_base() {
+        let offered = valid_transitions(&v("1.2.3")).unwrap();
+        let results: Vec<String> = offered.iter().map(|(_, r)| r.to_string()).collect();
+
+        assert_eq!(
+            results,
+            [
+                "1.2.4",
+                "1.3.0",
+                "2.0.0",
+                "1.2.4-alpha.0",
+                "1.3.0-alpha.0",
+                "2.0.0-alpha.0",
+                "1.2.4-beta.0",
+                "1.3.0-beta.0",
+                "2.0.0-beta.0",
+                "1.2.4-rc.0",
+                "1.3.0-rc.0",
+                "2.0.0-rc.0",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_stable_version_is_not_offered_release() {
+        let offered = valid_transitions(&v("1.2.3")).unwrap();
+        assert!(
+            !offered.iter().any(|(t, _)| *t == Transition::Release),
+            "there is nothing to finalize from a stable version"
+        );
+    }
+
+    #[test]
+    fn a_pre_release_offers_only_forward_moves_and_finalizing() {
+        let offered = valid_transitions(&v("1.3.0-beta.1")).unwrap();
+        let results: Vec<String> = offered.iter().map(|(_, r)| r.to_string()).collect();
+
+        // alpha is absent: it would be a move backwards.
+        assert_eq!(results, ["1.3.0-beta.2", "1.3.0-rc.0", "1.3.0"]);
+    }
+
+    #[test]
+    fn every_offered_transition_actually_succeeds() {
+        for current in ["0.1.0", "1.2.3", "1.2.3-alpha.0", "2.0.0-rc.7"] {
+            let version = v(current);
+            for (transition, expected) in valid_transitions(&version).unwrap() {
+                let actual = apply(&version, transition).unwrap_or_else(|e| {
+                    panic!("{current} offered {transition:?} but it failed: {e}")
+                });
+                assert_eq!(actual, expected, "{current} + {transition:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_uninterpretable_version_offers_nothing() {
+        assert!(valid_transitions(&v("1.2.3-nightly.4")).is_err());
     }
 
     #[test]

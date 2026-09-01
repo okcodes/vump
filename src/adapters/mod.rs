@@ -3,7 +3,9 @@
 pub mod filesystem;
 pub mod git;
 pub mod memory_vcs;
+pub mod terminal;
 
 pub use filesystem::{MemoryFileSystem, RealFileSystem};
 pub use git::GitCli;
 pub use memory_vcs::{MemoryVcs, VcsCall};
+pub use terminal::{NoInteraction, TerminalInteraction};
