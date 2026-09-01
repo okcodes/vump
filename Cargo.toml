@@ -10,7 +10,9 @@ publish = false
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 semver = "1"
+serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2"
+toml = "1.1.4"
 toml_edit = "0.25.13"
 
 # Release binaries are distributed via GitHub Releases and downloaded by CI, so

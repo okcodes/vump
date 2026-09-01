@@ -6,4 +6,5 @@
 //! network, or the terminal lives behind a trait so that the interesting
 //! behavior can be tested without any of them.
 
+pub mod config;
 pub mod domain;
