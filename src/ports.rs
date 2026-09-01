@@ -27,6 +27,22 @@ pub trait FileSystem {
 
     /// Whether a regular file exists at `path`.
     fn is_file(&self, path: &Path) -> bool;
+
+    /// Lists the entries of a directory, in unspecified order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FsError`] when the directory cannot be listed.
+    fn read_dir(&self, path: &Path) -> Result<Vec<DirEntry>, FsError>;
+}
+
+/// One entry within a directory.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DirEntry {
+    /// The entry's own name, without any leading path.
+    pub name: String,
+    /// Whether the entry is itself a directory.
+    pub is_dir: bool,
 }
 
 /// Questions a run may need to put to a person.

@@ -6,6 +6,7 @@
 
 pub mod bump;
 pub mod check;
+pub mod init;
 pub mod status;
 
 use std::path::{Path, PathBuf};

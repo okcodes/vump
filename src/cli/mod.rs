@@ -93,6 +93,17 @@ enum Command {
 
     /// Report the versions currently recorded, and whether they agree.
     Status,
+
+    /// Create a vump.toml tracking every version file found here.
+    ///
+    /// Writes a configuration that keeps all discovered files at one version,
+    /// with git actions off. Edit the result to split the repository into
+    /// independently-versioned projects or to enable git actions.
+    Init {
+        /// Overwrite an existing vump.toml.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 /// Options shared by every bump.
@@ -214,6 +225,15 @@ struct Context {
 
 fn execute(cli: &Cli) -> Result<Exit, CliError> {
     let cwd = std::env::current_dir().map_err(|e| CliError::WorkingDirectory(e.to_string()))?;
+
+    // init runs before configuration exists — creating it is the point — so it
+    // is dispatched ahead of discovery.
+    if let Some(Command::Init { force }) = &cli.command {
+        let written = app::init::init(&RealFileSystem, &cwd, *force)?;
+        render::init(&written, cli.json);
+        return Ok(Exit::Success);
+    }
+
     let (root, config) = Config::discover(&cwd)?;
 
     let ctx = Context {
@@ -258,6 +278,8 @@ fn execute(cli: &Cli) -> Result<Exit, CliError> {
         Command::Rc(a) => bump(&ctx, pre(PreLabel::Rc, a), a.dry_run, &a.git),
         Command::Check { version } => check(&ctx, version),
         Command::Status => status(&ctx),
+        // Handled before configuration discovery.
+        Command::Init { .. } => Ok(Exit::Success),
     }
 }
 
@@ -532,6 +554,9 @@ enum CliError {
     #[error("{0}")]
     Interaction(#[from] InteractionError),
 
+    #[error("{0}")]
+    Init(#[from] app::init::InitError),
+
     #[error("{text:?} is not a valid version: {detail}")]
     InvalidVersionArgument { text: String, detail: String },
 
@@ -548,6 +573,12 @@ impl CliError {
             Self::Config(_) => Exit::Config,
             Self::App(app) => app_exit(app),
             Self::Transition(_) => Exit::InvalidTransition,
+            Self::Init(init) => match init {
+                app::init::InitError::Filesystem(FsError::Io { .. }) => Exit::Failure,
+                app::init::InitError::AlreadyExists { .. }
+                | app::init::InitError::NothingFound { .. }
+                | app::init::InitError::Filesystem(FsError::NotFound { .. }) => Exit::Config,
+            },
             Self::Interaction(interaction) => match interaction {
                 // Declining is a decision, not a fault, but nothing was done,
                 // so it must not look like a successful run either.

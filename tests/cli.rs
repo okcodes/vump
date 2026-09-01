@@ -360,6 +360,47 @@ fn no_git_overrides_configured_actions() {
     assert!(String::from_utf8_lossy(&tags.stdout).trim().is_empty());
 }
 
+// ─── Initialization ──────────────────────────────────────────────────────────
+
+#[test]
+fn init_writes_a_config_the_next_command_can_use() {
+    let fx = Fixture::new()
+        .write("VERSION", "0.1.0\n")
+        .write("apps/web/package.json", "{\"version\":\"0.1.0\"}")
+        .write("node_modules/dep/package.json", "{\"version\":\"9.9.9\"}");
+
+    let run = fx.run(&["init"]);
+    assert_eq!(run.code, 0, "{}", run.output());
+
+    let config = fx.read("vump.toml");
+    assert!(config.contains("VERSION"));
+    assert!(config.contains("apps/web/package.json"));
+    assert!(
+        !config.contains("node_modules"),
+        "a dependency's manifest is not this project's version:\n{config}"
+    );
+
+    // The generated file must be usable immediately, without editing.
+    assert_eq!(fx.run(&["check", "0.1.0"]).code, 0);
+}
+
+#[test]
+fn init_refuses_to_overwrite_without_force() {
+    let fx = Fixture::new()
+        .write("VERSION", "0.1.0\n")
+        .write("vump.toml", SINGLE);
+
+    assert_eq!(fx.run(&["init"]).code, 3);
+    assert_eq!(fx.run(&["init", "--force"]).code, 0);
+}
+
+#[test]
+fn init_reports_when_there_is_nothing_to_track() {
+    let fx = Fixture::new().write("README.md", "nothing versioned here");
+    let run = fx.run(&["init"]);
+    assert_eq!(run.code, 3, "{}", run.output());
+}
+
 // ─── Multi-project repositories ──────────────────────────────────────────────
 
 const MULTI: &str = "\

@@ -5,7 +5,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use crate::ports::{FileSystem, FsError};
+use crate::ports::{DirEntry, FileSystem, FsError};
 
 /// Reads and writes the real filesystem.
 #[derive(Debug, Default, Clone, Copy)]
@@ -22,6 +22,23 @@ impl FileSystem for RealFileSystem {
 
     fn is_file(&self, path: &Path) -> bool {
         path.is_file()
+    }
+
+    fn read_dir(&self, path: &Path) -> Result<Vec<DirEntry>, FsError> {
+        let entries = std::fs::read_dir(path).map_err(|e| classify(path, &e))?;
+
+        let mut out = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|e| classify(path, &e))?;
+            // A name that is not valid UTF-8 cannot appear in configuration, so
+            // it is skipped rather than treated as an error.
+            let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
+                continue;
+            };
+            let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
+            out.push(DirEntry { name, is_dir });
+        }
+        Ok(out)
     }
 }
 
@@ -99,6 +116,30 @@ impl FileSystem for MemoryFileSystem {
 
     fn is_file(&self, path: &Path) -> bool {
         self.lock().contains_key(path)
+    }
+
+    fn read_dir(&self, path: &Path) -> Result<Vec<DirEntry>, FsError> {
+        let files = self.lock();
+
+        // Directories are implied by the paths stored, so the immediate child
+        // of `path` on each matching key is collected.
+        let mut entries: Vec<DirEntry> = Vec::new();
+        for stored in files.keys() {
+            let Ok(relative) = stored.strip_prefix(path) else {
+                continue;
+            };
+            let mut parts = relative.components();
+            let Some(first) = parts.next() else { continue };
+
+            let name = first.as_os_str().to_string_lossy().into_owned();
+            let is_dir = parts.next().is_some();
+            let entry = DirEntry { name, is_dir };
+            if !entries.contains(&entry) {
+                entries.push(entry);
+            }
+        }
+        entries.sort();
+        Ok(entries)
     }
 }
 

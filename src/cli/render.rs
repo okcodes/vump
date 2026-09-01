@@ -301,6 +301,27 @@ fn git_json(plan: &BumpPlan) -> Value {
     })
 }
 
+/// Renders the outcome of an `init`.
+pub fn init(files: &[String], json: bool) {
+    if json {
+        print(&json!({
+            "command": "init",
+            "ok": true,
+            "config": crate::config::FILE_NAME,
+            "files": files,
+        }));
+        return;
+    }
+
+    let marks = Marks::detect();
+    println!("{} wrote {} tracking:", marks.ok, crate::config::FILE_NAME);
+    for file in files {
+        println!("  {file}");
+    }
+    println!();
+    println!("Review it, then run `vump` to bump.");
+}
+
 /// Renders a failure.
 pub fn error(message: &str, exit: Exit, json: bool) {
     if json {
