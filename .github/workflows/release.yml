@@ -157,10 +157,22 @@ jobs:
       - name: Create GitHub Release and upload binaries
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
         run: |
-          gh release create "${{ github.ref_name }}" \
-            --title "vump ${{ github.ref_name }}" \
+          # A semver pre-release carries a hyphen after the numeric core. Such
+          # releases are published as GitHub pre-releases so that "latest" —
+          # which the check action and self-update both resolve — continues to
+          # point at the newest stable build.
+          PRERELEASE=()
+          if [[ "$TAG" == *-* ]]; then
+            PRERELEASE=(--prerelease)
+            echo "$TAG is a pre-release; it will not become the latest release."
+          fi
+
+          gh release create "$TAG" \
+            --title "vump $TAG" \
             --generate-notes \
+            "${PRERELEASE[@]}" \
             dist/vump-darwin-universal \
             dist/vump-linux-amd64 \
             dist/vump-linux-arm64 \
