@@ -9,6 +9,8 @@ publish = false
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+semver = "1"
+thiserror = "2"
 
 # Release binaries are distributed via GitHub Releases and downloaded by CI, so
 # they are optimized for size and startup rather than for build time.
