@@ -1,0 +1,38 @@
+[package]
+name = "vump"
+version = "0.2.0-alpha.2"
+edition = "2024"
+rust-version = "1.85"
+description = "Keep semver version numbers in sync across a repository, and verify them in CI"
+repository = "https://github.com/okcodes/vump"
+publish = false
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+inquire = "0.9.4"
+self-replace = "1.5.0"
+semver = "1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2"
+toml = "1.1.4"
+toml_edit = "0.25.13"
+ureq = { version = "3.4.0", default-features = false, features = ["rustls", "json"] }
+
+# Release binaries are distributed via GitHub Releases and downloaded by CI, so
+# they are optimized for size and startup rather than for build time.
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+
+[dev-dependencies]
+serde_json = "1.0.151"
+tempfile = "3.27.0"
