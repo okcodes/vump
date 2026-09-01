@@ -152,10 +152,6 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APP_SPECIFIC_PASSWORD_VUMP: ${{ secrets.APP_SPECIFIC_PASSWORD_VUMP }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # TEMPORARY — see TEMPORARY-OVERRIDES.md. Apple's notary service is
-          # rejecting submissions for this team pending an agreement update.
-          # Binaries are still signed; remove this line once that is resolved.
-          VUMP_SKIP_NOTARIZATION: '1'
         run: |
           chmod +x notarize.sh
           ./notarize.sh
