@@ -193,8 +193,16 @@ command to finish by hand — partial success is never reported as total failure
   written.
 - Only files declared in configuration are staged, so unrelated work cannot
   ride along in a version-bump commit.
-- vump never runs a package manager. It changes versions; refreshing lock files
-  is yours to do.
+- vump never runs a package manager. When a bump leaves a lock file recording
+  the old version, it says so and names the command that refreshes it:
+
+  ```
+  1 lock file is now out of date:
+    Cargo.lock  ->  cargo check
+  ```
+
+  This matters beyond tidiness — a stale `Cargo.lock` fails `cargo build
+  --locked`, which is what release pipelines run.
 
 ## Development
 
