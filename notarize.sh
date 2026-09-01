@@ -24,9 +24,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # ── Config ────────────────────────────────────────────────────────────────────
-APPLE_ID="${APPLE_ID:?'APPLE_ID env var is required'}"
-PASSWORD="${APP_SPECIFIC_PASSWORD_VUMP:?'APP_SPECIFIC_PASSWORD_VUMP env var is required'}"
+# Code signing always runs. Notarization is a separate call to Apple's service
+# and can be skipped independently, which keeps releases possible while an
+# account-level problem (an expired agreement, a lapsed membership) is resolved.
+# A skipped notarization is a real downgrade: Gatekeeper then verifies online on
+# first launch and warns the user, so this is a temporary measure, not a default.
+SKIP_NOTARIZATION="${VUMP_SKIP_NOTARIZATION:-0}"
+
+# Required for the signing identity lookup regardless of notarization.
 TEAM_ID="${APPLE_TEAM_ID:?'APPLE_TEAM_ID env var is required'}"
+
+if [[ "$SKIP_NOTARIZATION" != "1" ]]; then
+  APPLE_ID="${APPLE_ID:?'APPLE_ID env var is required'}"
+  PASSWORD="${APP_SPECIFIC_PASSWORD_VUMP:?'APP_SPECIFIC_PASSWORD_VUMP env var is required'}"
+fi
 
 # Derive the signing identity from Keychain — no name is hardcoded.
 # Looks for the first valid Developer ID Application cert matching your team.
@@ -151,6 +162,14 @@ done
 for BIN in "${TARGETS[@]}"; do
   echo ""
   sign_binary "$BIN"
+
+  if [[ "$SKIP_NOTARIZATION" == "1" ]]; then
+    echo "  ⚠ NOTARIZATION SKIPPED (VUMP_SKIP_NOTARIZATION=1)"
+    echo "    $(basename "$BIN") is signed but NOT notarized."
+    echo "    Gatekeeper will warn on first launch until this is re-enabled."
+    continue
+  fi
+
   notarize_binary "$BIN"
 done
 

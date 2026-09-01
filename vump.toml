@@ -4,12 +4,11 @@
 # binary reads it at compile time via CARGO_PKG_VERSION, and CI verifies that
 # every released tag matches it before building or publishing anything.
 
+files = ["Cargo.toml"]
+
 [git]
 commit = true
 commit_message = "chore: bump version to v{new_version}"
 tag = true
 tag_pattern = "v{new_version}"
 push = false
-
-[[files]]
-path = "Cargo.toml"
