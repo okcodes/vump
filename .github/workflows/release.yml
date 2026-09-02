@@ -156,6 +156,28 @@ jobs:
           chmod +x notarize.sh
           ./notarize.sh
 
+      # Computed after signing, which rewrites the macOS binary: a digest taken
+      # before it would describe an artifact nobody receives. Only the assets
+      # actually published are listed, so a digest exists for exactly what a
+      # consumer can download.
+      - name: Publish checksums
+        working-directory: dist
+        run: |
+          shasum -a 256 \
+            vump-darwin-universal \
+            vump-linux-amd64 \
+            vump-linux-arm64 \
+            vump-windows-amd64.exe \
+            vump-windows-arm64.exe \
+            > SHA256SUMS
+
+          echo "Published digests:"
+          cat SHA256SUMS
+
+          # Guards against a silently empty or partial listing, which would
+          # otherwise publish a release that verification cannot use.
+          test "$(wc -l < SHA256SUMS)" -eq 5
+
       # The per-architecture macOS slices are intentionally not published: the
       # universal binary supersedes them and is the only notarized artifact.
       - name: Create GitHub Release and upload binaries
@@ -177,6 +199,7 @@ jobs:
             --title "vump $TAG" \
             --generate-notes \
             "${PRERELEASE[@]}" \
+            dist/SHA256SUMS \
             dist/vump-darwin-universal \
             dist/vump-linux-amd64 \
             dist/vump-linux-arm64 \

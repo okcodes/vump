@@ -224,6 +224,18 @@ when published, so the two can never disagree.
 whether or not the channel would have offered it. That is what makes a rollback
 expressible, and it is safe because you had to write the version out.
 
+### Downloads are verified
+
+Every release publishes a `SHA256SUMS` asset. `vump self update` and the CI
+action both check what they downloaded against it before the binary is written
+to disk or run.
+
+A release that publishes no checksums is **refused, not warned about** — this
+is the path that downloads a binary and then executes it, and in CI it does so
+in a job that can hold signing secrets. Releases published before checksums
+existed therefore cannot be installed by `self update`; download them by hand
+if you need one.
+
 ## Scripting and automation
 
 `--json` renders every command's result as structured output, including bump

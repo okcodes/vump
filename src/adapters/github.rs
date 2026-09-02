@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use crate::app::update::{Release, ReleaseSource, UpdateError, parse_tag};
+use crate::domain::Checksums;
 
 /// Where vump publishes its own binaries.
 const REPOSITORY: &str = "okcodes/vump";
@@ -15,6 +16,16 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 /// publish between prunings, and one page keeps the command a single call.
 const PAGE_SIZE: u32 = 100;
 
+/// The asset carrying digests for every binary in a release.
+///
+/// The name is shared with the release workflow and the CI action; changing it
+/// in one place without the others breaks verification everywhere.
+pub const CHECKSUMS_ASSET: &str = "SHA256SUMS";
+
+/// An upper bound on a downloaded artifact, so a hostile or broken response
+/// cannot exhaust memory.
+const MAX_DOWNLOAD: u64 = 256 * 1024 * 1024;
+
 /// Reads releases from the GitHub API and replaces the running binary.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GitHubReleases;
@@ -24,6 +35,31 @@ impl GitHubReleases {
     #[must_use]
     pub fn new() -> Self {
         Self
+    }
+
+    /// Fetches one release asset.
+    fn download(release: &Release, asset: &str) -> Result<Vec<u8>, UpdateError> {
+        let url = format!(
+            "https://github.com/{REPOSITORY}/releases/download/{}/{asset}",
+            release.tag
+        );
+
+        let fail = |detail: String| UpdateError::InstallFailed {
+            asset: asset.to_owned(),
+            detail,
+        };
+
+        let mut response = Self::agent()
+            .get(&url)
+            .call()
+            .map_err(|e| fail(e.to_string()))?;
+
+        response
+            .body_mut()
+            .with_config()
+            .limit(MAX_DOWNLOAD)
+            .read_to_vec()
+            .map_err(|e| fail(e.to_string()))
     }
 
     fn agent() -> ureq::Agent {
@@ -80,28 +116,35 @@ impl ReleaseSource for GitHubReleases {
             .collect())
     }
 
-    fn install(&self, release: &Release, asset: &str) -> Result<(), UpdateError> {
-        let url = format!(
-            "https://github.com/{REPOSITORY}/releases/download/{}/{asset}",
-            release.tag
-        );
+    fn checksums(&self, release: &Release) -> Result<Option<Checksums>, UpdateError> {
+        let text = match Self::download(release, CHECKSUMS_ASSET) {
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            // A release published before checksums existed simply has no such
+            // asset. That is reported as absence, and refused by the caller,
+            // rather than mistaken for a network failure.
+            Err(UpdateError::InstallFailed { .. }) => return Ok(None),
+            Err(other) => return Err(other),
+        };
 
+        Ok(Some(Checksums::parse(&text)))
+    }
+
+    fn install(
+        &self,
+        release: &Release,
+        asset: &str,
+        expected: &Checksums,
+    ) -> Result<(), UpdateError> {
         let fail = |detail: String| UpdateError::InstallFailed {
             asset: asset.to_owned(),
             detail,
         };
 
-        let mut response = Self::agent()
-            .get(&url)
-            .call()
-            .map_err(|e| fail(e.to_string()))?;
+        let bytes = Self::download(release, asset)?;
 
-        let bytes = response
-            .body_mut()
-            .with_config()
-            .limit(256 * 1024 * 1024)
-            .read_to_vec()
-            .map_err(|e| fail(e.to_string()))?;
+        // Verified before anything touches the filesystem: a binary that fails
+        // this must never exist on disk, let alone be executed.
+        expected.verify(asset, &bytes)?;
 
         // The replacement is staged next to the running binary so that the
         // final move is within one filesystem, and therefore atomic.

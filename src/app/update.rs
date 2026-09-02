@@ -12,6 +12,7 @@ use semver::Version;
 use thiserror::Error;
 
 use crate::domain::PreLabel;
+use crate::domain::checksum::{ChecksumError, Checksums};
 
 /// Where releases are published and how the running binary is replaced.
 pub trait ReleaseSource {
@@ -22,12 +23,29 @@ pub trait ReleaseSource {
     /// Returns [`UpdateError`] when releases cannot be listed.
     fn list(&self) -> Result<Vec<Release>, UpdateError>;
 
-    /// Downloads `asset` from `release` and replaces the running binary.
+    /// The digests published alongside `release`.
+    ///
+    /// Returns `None` when the release publishes none, which is refused rather
+    /// than tolerated — see [`update`].
     ///
     /// # Errors
     ///
-    /// Returns [`UpdateError`] when the download or replacement fails.
-    fn install(&self, release: &Release, asset: &str) -> Result<(), UpdateError>;
+    /// Returns [`UpdateError`] when the listing cannot be fetched or read.
+    fn checksums(&self, release: &Release) -> Result<Option<Checksums>, UpdateError>;
+
+    /// Downloads `asset` from `release` and replaces the running binary,
+    /// installing nothing unless the contents match `expected`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UpdateError`] when the download fails, the contents do not
+    /// match, or the replacement fails.
+    fn install(
+        &self,
+        release: &Release,
+        asset: &str,
+        expected: &Checksums,
+    ) -> Result<(), UpdateError>;
 }
 
 /// A published release.
@@ -164,6 +182,19 @@ pub enum UpdateError {
         /// Underlying error detail.
         detail: String,
     },
+
+    /// The release publishes nothing to verify its binaries against.
+    #[error(
+        "release {version} publishes no checksums, so its binaries cannot be verified; refusing to install"
+    )]
+    Unverifiable {
+        /// The release that cannot be trusted.
+        version: Version,
+    },
+
+    /// What arrived is not what was published.
+    #[error("{0}")]
+    Corrupt(#[from] ChecksumError),
 }
 
 /// What an update or status run concluded.
@@ -314,7 +345,19 @@ pub fn update(
         arch: arch.to_owned(),
     })?;
 
-    source.install(release, &asset)?;
+    // Nothing is installed that cannot be checked first. A release without
+    // published checksums is refused outright rather than installed with a
+    // warning: a warning on the highest-privilege path in the tool is not a
+    // safeguard, and the whole point of publishing digests is that an
+    // unverified binary never runs.
+    let checksums = source
+        .checksums(release)?
+        .filter(|sums| !sums.is_empty())
+        .ok_or_else(|| UpdateError::Unverifiable {
+            version: release.version.clone(),
+        })?;
+
+    source.install(release, &asset, &checksums)?;
 
     Ok(UpdateOutcome::Installed {
         previous: current.clone(),
@@ -411,10 +454,15 @@ mod tests {
         tags.iter().filter_map(|t| parse_tag(t)).collect()
     }
 
+    /// The digest every fake release publishes for its binaries.
+    const DIGEST: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
     /// A release source over a fixed set of tags that records installs.
     struct Fake {
         published: Vec<Release>,
         installed: RefCell<Vec<String>>,
+        /// Releases that publish no checksums, by tag.
+        unverifiable: Vec<String>,
     }
 
     impl Fake {
@@ -422,7 +470,14 @@ mod tests {
             Self {
                 published: releases(tags),
                 installed: RefCell::new(Vec::new()),
+                unverifiable: Vec::new(),
             }
+        }
+
+        /// Marks a release as predating published checksums.
+        fn without_checksums(mut self, tag: &str) -> Self {
+            self.unverifiable.push(tag.to_owned());
+            self
         }
 
         fn installs(&self) -> Vec<String> {
@@ -435,7 +490,28 @@ mod tests {
             Ok(self.published.clone())
         }
 
-        fn install(&self, release: &Release, _: &str) -> Result<(), UpdateError> {
+        fn checksums(&self, release: &Release) -> Result<Option<Checksums>, UpdateError> {
+            if self.unverifiable.contains(&release.tag) {
+                return Ok(None);
+            }
+            Ok(Some(Checksums::parse(&format!(
+                "{DIGEST}  vump-linux-amd64\n"
+            ))))
+        }
+
+        fn install(
+            &self,
+            release: &Release,
+            asset: &str,
+            expected: &Checksums,
+        ) -> Result<(), UpdateError> {
+            // The real adapter verifies before replacing; the fake asserts the
+            // digest it was handed actually covers the asset, so a use case
+            // that passed the wrong listing would be caught here.
+            assert!(
+                expected.get(asset).is_some(),
+                "install was handed checksums that do not cover {asset}"
+            );
             self.installed.borrow_mut().push(release.tag.clone());
             Ok(())
         }
@@ -673,6 +749,51 @@ mod tests {
         };
         assert!(available.contains("1.1.0"), "{available}");
         assert!(source.installs().is_empty());
+    }
+
+    #[test]
+    fn a_release_without_published_checksums_is_refused() {
+        // Refusing rather than warning: a warning on the path that downloads
+        // and then executes a binary is not a safeguard.
+        let source = Fake::with(&["v1.0.0", "v2.0.0"]).without_checksums("v2.0.0");
+
+        let err = update(&source, &v("1.0.0"), LINUX, Channel::Stable, None).unwrap_err();
+
+        assert!(matches!(err, UpdateError::Unverifiable { .. }));
+        assert!(
+            source.installs().is_empty(),
+            "nothing may be installed from a release that cannot be verified"
+        );
+    }
+
+    #[test]
+    fn an_explicitly_requested_release_is_verified_too() {
+        // Naming a version is consent to install it, not consent to skip
+        // checking what arrives.
+        let source = Fake::with(&["v1.0.0", "v2.0.0"]).without_checksums("v1.0.0");
+
+        let err = update(
+            &source,
+            &v("2.0.0"),
+            LINUX,
+            Channel::Stable,
+            Some(&v("1.0.0")),
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, UpdateError::Unverifiable { .. }));
+        assert!(source.installs().is_empty());
+    }
+
+    #[test]
+    fn status_and_list_do_not_require_checksums() {
+        // Neither downloads anything, so neither has anything to verify.
+        let source = Fake::with(&["v1.0.0", "v2.0.0"])
+            .without_checksums("v1.0.0")
+            .without_checksums("v2.0.0");
+
+        assert!(status(&source, &v("1.0.0"), Channel::Stable).is_ok());
+        assert!(list(&source, &v("1.0.0"), Channel::Stable).is_ok());
     }
 
     #[test]

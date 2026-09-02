@@ -330,6 +330,22 @@ Rules that keep the boundaries real:
   first, then replaced. That platform difference is delegated to a library
   rather than reimplemented. Downgrades are refused: a development build ahead
   of the last release must never be overwritten by it.
+- **Downloaded artifacts are verified.** Every release publishes a `SHA256SUMS`
+  asset; self-update and the CI action both check what arrived against it
+  before writing to disk or executing. The digests are computed *after*
+  signing, since signing rewrites the macOS binary and a digest taken earlier
+  would describe an artifact nobody receives.
+
+  A release publishing no checksums is refused rather than installed with a
+  warning. This is the highest-privilege path in the project — it downloads a
+  binary and then runs it as the user, and in CI inside a job holding signing
+  secrets — and a warning on that path is not a safeguard. The cost is that
+  releases predating checksums cannot be installed by `self update`, which is
+  accepted.
+
+  Read-only commands (`self status`, `self list`) download nothing and so
+  require nothing to verify.
+
 - **Release discovery** reads the full release list rather than the endpoint
   that returns only the latest non-pre-release, because that endpoint answers
   one channel's question. Maturity is derived from each version itself, so it
