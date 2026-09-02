@@ -8,7 +8,8 @@ use std::io::IsTerminal;
 
 use serde_json::{Value, json};
 
-use crate::app::bump::{BumpOutcome, BumpPlan};
+use crate::app::bump::BumpPlan;
+use crate::app::change::{ChangeSet, Outcome};
 use crate::app::check::CheckReport;
 use crate::app::lockfile::StaleLock;
 use crate::app::status::ProjectStatus;
@@ -161,70 +162,109 @@ pub fn summary(plan: &BumpPlan) -> String {
 
     let mut out = String::new();
     let _ = writeln!(out);
-    if let Some(project) = plan.project.as_deref() {
+    if let Some(project) = plan.changes.project.as_deref() {
         let _ = writeln!(out, "  Project:  {project}");
     }
-    let _ = writeln!(out, "  Bumping:  {}  ->  {}", plan.current, plan.next);
+    let _ = writeln!(
+        out,
+        "  Bumping:  {}  ->  {}",
+        plan.from, plan.changes.target
+    );
 
-    for change in &plan.changes {
-        let _ = writeln!(out, "  File:     {}", change.path);
+    for file in &plan.changes.files {
+        let _ = writeln!(out, "  File:     {}", file.path);
     }
-    if let Some(message) = plan.git.commit.as_deref() {
+    if let Some(message) = plan.changes.git.commit.as_deref() {
         let _ = writeln!(out, "  Commit:   {message}");
     }
-    if let Some(tag) = plan.git.tag.as_deref() {
+    if let Some(tag) = plan.changes.git.tag.as_deref() {
         let _ = writeln!(out, "  Tag:      {tag}");
     }
     let _ = writeln!(
         out,
         "  Push:     {}",
-        if plan.git.push { "yes" } else { "no" }
+        if plan.changes.git.push { "yes" } else { "no" }
     );
 
     out
 }
 
-/// Renders a plan that will not be carried out.
-pub fn plan(plan: &BumpPlan, json: bool) {
+/// Renders a change that will not be carried out.
+pub fn plan(changes: &ChangeSet, json: bool) {
     if json {
         print(&json!({
             "command": "plan",
             "ok": true,
             "dry_run": true,
-            "project": plan.project,
-            "current": plan.current.to_string(),
-            "next": plan.next.to_string(),
-            "changes": changes_json(plan),
-            "git": git_json(plan),
+            "project": changes.project,
+            "current": changes.common_origin().map(ToString::to_string),
+            "next": changes.target.to_string(),
+            "changes": changes_json(changes),
+            "git": git_json(changes),
         }));
         return;
     }
 
-    println!("{} -> {}  (dry run)", plan.current, plan.next);
-    println!();
-    for change in &plan.changes {
-        println!("  would write  {}", change.path);
+    match changes.common_origin() {
+        Some(origin) => println!("{origin} -> {}  (dry run)", changes.target),
+        // Files disagree, so there is no single version being moved from; each
+        // file's own is shown beside it below.
+        None => println!("-> {}  (dry run)", changes.target),
     }
-    describe_git_plan(plan);
+    println!();
+    for file in &changes.files {
+        if changes.common_origin().is_some() {
+            println!("  would write  {}", file.path);
+        } else {
+            println!("  would write  {}  ({})", file.path, file.from);
+        }
+    }
+    describe_git_plan(changes);
     println!();
     println!("Nothing was written.");
 }
 
-/// Renders a completed bump.
-pub fn bump(plan: &BumpPlan, outcome: &BumpOutcome, stale: &[StaleLock], json: bool) {
+/// Renders a run that found nothing to do.
+///
+/// Reported as success rather than as an error: the files record the version
+/// that was asked for, which is the outcome the caller wanted.
+pub fn unchanged(changes: &ChangeSet, json: bool) {
+    if json {
+        print(&json!({
+            "command": "set",
+            "ok": true,
+            "changed": false,
+            "project": changes.project,
+            "version": changes.target.to_string(),
+            "changes": [],
+        }));
+        return;
+    }
+
+    let marks = Marks::detect();
+    let count = changes.files.len();
+    let subject = if count == 1 { "file" } else { "files" };
+    println!(
+        "{} {count} {subject} already record {}; nothing to do",
+        marks.ok, changes.target
+    );
+}
+
+/// Renders a completed change.
+pub fn applied(changes: &ChangeSet, outcome: &Outcome, stale: &[StaleLock], json: bool) {
     if json {
         print(&json!({
             "command": "bump",
             "ok": outcome.push_error.is_none(),
-            "project": plan.project,
-            "previous": plan.current.to_string(),
-            "version": plan.next.to_string(),
-            "changes": changes_json(plan),
+            "project": changes.project,
+            "previous": changes.common_origin().map(ToString::to_string),
+            "version": changes.target.to_string(),
+            "changes": changes_json(changes),
             "git": {
                 "committed": outcome.committed,
-                "commit_message": plan.git.commit,
+                "commit_message": changes.git.commit,
                 "tagged": outcome.tagged,
-                "tag": plan.git.tag,
+                "tag": changes.git.tag,
                 "pushed": outcome.pushed,
                 "push_error": outcome.push_error,
             },
@@ -235,15 +275,18 @@ pub fn bump(plan: &BumpPlan, outcome: &BumpOutcome, stale: &[StaleLock], json: b
 
     let marks = Marks::detect();
 
-    println!("{} {} -> {}", marks.ok, plan.current, plan.next);
+    match changes.common_origin() {
+        Some(origin) => println!("{} {origin} -> {}", marks.ok, changes.target),
+        None => println!("{} set to {}", marks.ok, changes.target),
+    }
     for path in &outcome.written {
         println!("  {path}");
     }
 
-    if let Some(message) = plan.git.commit.as_deref().filter(|_| outcome.committed) {
+    if let Some(message) = changes.git.commit.as_deref().filter(|_| outcome.committed) {
         println!("{} committed  {message}", marks.ok);
     }
-    if let Some(tag) = plan.git.tag.as_deref().filter(|_| outcome.tagged) {
+    if let Some(tag) = changes.git.tag.as_deref().filter(|_| outcome.tagged) {
         println!("{} tagged     {tag}", marks.ok);
     }
 
@@ -254,21 +297,21 @@ pub fn bump(plan: &BumpPlan, outcome: &BumpOutcome, stale: &[StaleLock], json: b
         eprintln!("{} push failed: {detail}", marks.fail);
         eprintln!();
         eprintln!("Everything else succeeded. To finish:");
-        eprintln!("  {}", push_command(plan.git.tag.as_deref()));
+        eprintln!("  {}", push_command(changes.git.tag.as_deref()));
     } else if outcome.pushed {
         println!("{} pushed", marks.ok);
     } else if outcome.committed {
         println!();
         println!("To push:");
-        println!("  {}", push_command(plan.git.tag.as_deref()));
+        println!("  {}", push_command(changes.git.tag.as_deref()));
     }
 
     describe_stale_locks(stale);
 }
 
-/// Reports lock files a bump has left disagreeing with their manifest.
+/// Reports lock files a change has left disagreeing with their manifest.
 ///
-/// Printed after the git summary because it is advisory: the bump succeeded,
+/// Printed after the git summary because it is advisory: the change succeeded,
 /// and this is the next thing to do.
 fn describe_stale_locks(stale: &[StaleLock]) {
     if stale.is_empty() {
@@ -306,58 +349,38 @@ fn push_command(tag: Option<&str>) -> String {
     }
 }
 
-fn describe_git_plan(plan: &BumpPlan) {
-    if let Some(message) = plan.git.commit.as_deref() {
+fn describe_git_plan(changes: &ChangeSet) {
+    if let Some(message) = changes.git.commit.as_deref() {
         println!("  would commit  {message}");
     }
-    if let Some(tag) = plan.git.tag.as_deref() {
+    if let Some(tag) = changes.git.tag.as_deref() {
         println!("  would tag     {tag}");
     }
-    if plan.git.push {
+    if changes.git.push {
         println!("  would push");
     }
 }
 
-fn changes_json(plan: &BumpPlan) -> Vec<Value> {
-    plan.changes
+fn changes_json(changes: &ChangeSet) -> Vec<Value> {
+    changes
+        .files
         .iter()
-        .map(|c| {
+        .map(|f| {
             json!({
-                "path": c.path,
-                "from": c.from.to_string(),
-                "to": c.to.to_string(),
+                "path": f.path,
+                "from": f.from.to_string(),
+                "to": changes.target.to_string(),
             })
         })
         .collect()
 }
 
-fn git_json(plan: &BumpPlan) -> Value {
+fn git_json(changes: &ChangeSet) -> Value {
     json!({
-        "commit_message": plan.git.commit,
-        "tag": plan.git.tag,
-        "push": plan.git.push,
+        "commit_message": changes.git.commit,
+        "tag": changes.git.tag,
+        "push": changes.git.push,
     })
-}
-
-/// Renders the outcome of an `init`.
-pub fn init(files: &[String], json: bool) {
-    if json {
-        print(&json!({
-            "command": "init",
-            "ok": true,
-            "config": crate::config::FILE_NAME,
-            "files": files,
-        }));
-        return;
-    }
-
-    let marks = Marks::detect();
-    println!("{} wrote {} tracking:", marks.ok, crate::config::FILE_NAME);
-    for file in files {
-        println!("  {file}");
-    }
-    println!();
-    println!("Review it, then run `vump` to bump.");
 }
 
 /// Renders the outcome of a `self update` or `self status`.
@@ -477,6 +500,27 @@ pub fn releases(listing: &Listing, limit: Option<usize>, json: bool) {
         println!();
         println!("running {} (not a published release)", listing.current);
     }
+}
+
+/// Renders the outcome of an `init`.
+pub fn init(files: &[String], json: bool) {
+    if json {
+        print(&json!({
+            "command": "init",
+            "ok": true,
+            "config": crate::config::FILE_NAME,
+            "files": files,
+        }));
+        return;
+    }
+
+    let marks = Marks::detect();
+    println!("{} wrote {} tracking:", marks.ok, crate::config::FILE_NAME);
+    for file in files {
+        println!("  {file}");
+    }
+    println!();
+    println!("Review it, then run `vump` to bump.");
 }
 
 /// Renders a failure.

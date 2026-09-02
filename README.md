@@ -46,6 +46,7 @@ needs, or it fails saying what is missing.
 | `vump patch\|minor\|major` | Bump a stable version |
 | `vump alpha\|beta\|rc` | Start or advance a pre-release |
 | `vump release` | Drop the pre-release suffix |
+| `vump set <version>` | Write an exact version to every tracked file |
 | `vump check <version>` | Verify tracked files record this version |
 | `vump status` | Report recorded versions and whether they agree |
 | `vump init` | Create a `vump.toml` |
@@ -174,6 +175,29 @@ Refused, deliberately:
   finalizing and abandoning. Run `release` first, then bump.
 - **A pre-release from a stable version without `--from`.** A pre-release must
   know which release it precedes.
+
+## Repairing files that disagree
+
+A bump requires the tracked files to agree, and refuses when they do not — a
+source of truth contradicting itself is something to look at, not guess about.
+`set` is how that is repaired:
+
+```bash
+$ vump patch
+error: tracked files disagree about the current version:
+  VERSION       1.2.3
+  package.json  0.9.0
+
+$ vump set 2.0.0        # writes both, no agreement required
+$ vump patch            # works again
+```
+
+It is also how a project whose files never agreed is adopted, and how a
+mistaken bump is undone: `set` does not refuse to move backwards, on the same
+reasoning as `self update --to` — a version written out by hand is consent.
+
+Setting the version the files already record reports that and stops, rather
+than failing at a commit git would refuse as empty.
 
 ## Verifying a tag in CI
 
