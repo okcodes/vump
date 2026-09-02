@@ -57,14 +57,31 @@ impl GitPlan {
 pub struct BumpPlan {
     /// Project name, when the repository declares several.
     pub project: Option<String>,
-    /// Version currently recorded by every tracked file.
-    pub current: Version,
+    /// Version every tracked file currently records.
+    ///
+    /// `None` when they do not agree, which only a plan produced by [`set`] can
+    /// be: a bump requires agreement, whereas setting an exact version is how
+    /// disagreement is repaired. Each file's own previous version is always
+    /// available in `changes`.
+    pub current: Option<Version>,
     /// Version that will be recorded.
     pub next: Version,
     /// Per-file changes, in declaration order.
     pub changes: Vec<FileChange>,
     /// Git side-effects.
     pub git: GitPlan,
+}
+
+impl BumpPlan {
+    /// Whether any file's version would actually change.
+    ///
+    /// Setting the version files already record changes nothing, and committing
+    /// an empty change is an error rather than a no-op, so callers check this
+    /// before acting.
+    #[must_use]
+    pub fn changes_anything(&self) -> bool {
+        self.changes.iter().any(|c| c.from != c.to)
+    }
 }
 
 /// What actually happened when a plan was applied.
@@ -257,6 +274,52 @@ pub fn plan_from(
 
     let next = transition_apply(&current, transition)?;
 
+    Ok(compose(project, Some(current), next, files, planning))
+}
+
+/// Decides what writing an exact version would change.
+///
+/// Unlike a bump, this does not require the tracked files to agree beforehand:
+/// a disagreement is precisely what naming an exact version repairs. It also
+/// does not refuse to move backwards, for the same reason `self update --to`
+/// does not — a version written out by hand is consent.
+///
+/// # Errors
+///
+/// Returns a [`BumpError`] when a tracked file cannot be read or interpreted.
+pub fn set(
+    fs: &dyn FileSystem,
+    root: &Path,
+    project: &Project,
+    target: Version,
+    planning: GitPlanning<'_>,
+) -> Result<BumpPlan, BumpError> {
+    let files = read_project_versions(fs, root, project)?;
+
+    // Reported only when the files already agree; otherwise there is no single
+    // version they are moving from, and each file's own is in `changes`.
+    let mut distinct: Vec<&Version> = Vec::new();
+    for file in &files {
+        if !distinct.contains(&&file.version) {
+            distinct.push(&file.version);
+        }
+    }
+    let current = match distinct.as_slice() {
+        [only] => Some((*only).clone()),
+        _ => None,
+    };
+
+    Ok(compose(project, current, target, files, planning))
+}
+
+/// Builds the plan shared by bumping and setting.
+fn compose(
+    project: &Project,
+    current: Option<Version>,
+    next: Version,
+    files: Vec<crate::app::FileVersion>,
+    planning: GitPlanning<'_>,
+) -> BumpPlan {
     let changes = files
         .into_iter()
         .map(|f| FileChange {
@@ -275,13 +338,13 @@ pub fn plan_from(
         push: planning.intent.push,
     };
 
-    Ok(BumpPlan {
+    BumpPlan {
         project: project.name.clone(),
         current,
         next,
         changes,
         git,
-    })
+    }
 }
 
 /// Carries out a plan.
@@ -421,7 +484,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(plan.current, v("1.2.3"));
+        assert_eq!(plan.current, Some(v("1.2.3")));
         assert_eq!(plan.next, v("1.2.4"));
         assert_eq!(plan.changes.len(), 2);
         assert!(!plan.git.touches_repository());
@@ -641,6 +704,163 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, BumpError::Transition(_)));
+    }
+
+    // ─── set ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn set_writes_the_exact_version_asked_for() {
+        let fs = MemoryFileSystem::new().with_file("/repo/VERSION", "1.2.3\n");
+        let vcs = MemoryVcs::new();
+
+        let plan = set(
+            &fs,
+            root(),
+            &project(&["VERSION"]),
+            v("2.0.0"),
+            planning(GitIntent::default(), &settings(), &default_pattern()),
+        )
+        .unwrap();
+
+        apply(&fs, &vcs, root(), &plan).unwrap();
+        assert_eq!(fs.get("/repo/VERSION").as_deref(), Some("2.0.0\n"));
+    }
+
+    #[test]
+    fn set_repairs_files_that_disagree() {
+        // A bump refuses this outright. Repairing it is the whole point of
+        // naming an exact version.
+        let fs = MemoryFileSystem::new()
+            .with_file("/repo/VERSION", "1.2.3\n")
+            .with_file("/repo/Cargo.toml", "[package]\nversion = \"0.9.0\"\n");
+        let vcs = MemoryVcs::new();
+
+        let plan = set(
+            &fs,
+            root(),
+            &project(&["VERSION", "Cargo.toml"]),
+            v("2.0.0"),
+            planning(GitIntent::default(), &settings(), &default_pattern()),
+        )
+        .unwrap();
+
+        // There is no single version they are moving from, and saying otherwise
+        // would misreport one of them.
+        assert!(plan.current.is_none());
+        assert_eq!(plan.changes[0].from, v("1.2.3"));
+        assert_eq!(plan.changes[1].from, v("0.9.0"));
+
+        apply(&fs, &vcs, root(), &plan).unwrap();
+        assert_eq!(fs.get("/repo/VERSION").as_deref(), Some("2.0.0\n"));
+        assert!(fs.get("/repo/Cargo.toml").unwrap().contains("2.0.0"));
+    }
+
+    #[test]
+    fn set_reports_the_shared_version_when_files_already_agree() {
+        let fs = MemoryFileSystem::new()
+            .with_file("/repo/VERSION", "1.2.3\n")
+            .with_file("/repo/Cargo.toml", "[package]\nversion = \"1.2.3\"\n");
+
+        let plan = set(
+            &fs,
+            root(),
+            &project(&["VERSION", "Cargo.toml"]),
+            v("2.0.0"),
+            planning(GitIntent::default(), &settings(), &default_pattern()),
+        )
+        .unwrap();
+
+        assert_eq!(plan.current, Some(v("1.2.3")));
+    }
+
+    #[test]
+    fn set_moves_backwards_without_complaint() {
+        // Matching `self update --to`: a version written out by hand is
+        // consent, and refusing would leave no way to undo a mistaken bump.
+        let fs = MemoryFileSystem::new().with_file("/repo/VERSION", "2.0.0\n");
+        let vcs = MemoryVcs::new();
+
+        let plan = set(
+            &fs,
+            root(),
+            &project(&["VERSION"]),
+            v("1.0.0"),
+            planning(GitIntent::default(), &settings(), &default_pattern()),
+        )
+        .unwrap();
+
+        apply(&fs, &vcs, root(), &plan).unwrap();
+        assert_eq!(fs.get("/repo/VERSION").as_deref(), Some("1.0.0\n"));
+    }
+
+    #[test]
+    fn setting_the_recorded_version_changes_nothing() {
+        // Committing an empty change is an error, so the caller checks this
+        // rather than failing at the commit for an unrelated-looking reason.
+        let fs = MemoryFileSystem::new().with_file("/repo/VERSION", "1.2.3\n");
+
+        let plan = set(
+            &fs,
+            root(),
+            &project(&["VERSION"]),
+            v("1.2.3"),
+            planning(GitIntent::default(), &settings(), &default_pattern()),
+        )
+        .unwrap();
+
+        assert!(!plan.changes_anything());
+    }
+
+    #[test]
+    fn a_partial_disagreement_still_counts_as_a_change() {
+        let fs = MemoryFileSystem::new()
+            .with_file("/repo/VERSION", "1.2.3\n")
+            .with_file("/repo/Cargo.toml", "[package]\nversion = \"0.9.0\"\n");
+
+        let plan = set(
+            &fs,
+            root(),
+            &project(&["VERSION", "Cargo.toml"]),
+            v("1.2.3"),
+            planning(GitIntent::default(), &settings(), &default_pattern()),
+        )
+        .unwrap();
+
+        // One file already matches; the other does not, so there is work to do.
+        assert!(plan.changes_anything());
+    }
+
+    #[test]
+    fn set_tags_with_the_version_it_wrote() {
+        let fs = MemoryFileSystem::new().with_file("/repo/VERSION", "1.0.0\n");
+        let vcs = MemoryVcs::new();
+
+        let plan = set(
+            &fs,
+            root(),
+            &project(&["VERSION"]),
+            v("3.0.0"),
+            planning(
+                GitIntent {
+                    commit: true,
+                    tag: true,
+                    push: false,
+                },
+                &settings(),
+                &default_pattern(),
+            ),
+        )
+        .unwrap();
+
+        apply(&fs, &vcs, root(), &plan).unwrap();
+        assert_eq!(
+            vcs.calls(),
+            [
+                VcsCall::Stage(vec!["VERSION".to_owned()]),
+                VcsCall::Commit("chore: bump version to v3.0.0".to_owned()),
+                VcsCall::Tag("v3.0.0".to_owned()),
+            ]
+        );
     }
 
     #[test]

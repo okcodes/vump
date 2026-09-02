@@ -92,6 +92,23 @@ enum Command {
         version: String,
     },
 
+    /// Write an exact version to every tracked file.
+    ///
+    /// Unlike a bump this does not require the files to agree first, which is
+    /// how a disagreement is repaired, and it does not refuse to move
+    /// backwards: naming a version is consent.
+    Set {
+        /// Version to write, with or without a leading "v".
+        version: String,
+
+        /// Report what would change without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+
+        #[command(flatten)]
+        git: GitArgs,
+    },
+
     /// Report the versions currently recorded, and whether they agree.
     Status,
 
@@ -353,6 +370,11 @@ fn execute(cli: &Cli) -> Result<Exit, CliError> {
         Command::Beta(a) => bump(&ctx, pre(PreLabel::Beta, a), a.dry_run, &a.git),
         Command::Rc(a) => bump(&ctx, pre(PreLabel::Rc, a), a.dry_run, &a.git),
         Command::Check { version } => check(&ctx, version),
+        Command::Set {
+            version,
+            dry_run,
+            git,
+        } => set(&ctx, version, *dry_run, git),
         Command::Status => status(&ctx),
         // Handled before configuration discovery.
         Command::Init { .. } | Command::SelfCmd(_) => Ok(Exit::Success),
@@ -629,6 +651,55 @@ fn bump(
 /// The argument may be a full tag (`api-v1.2.3`) or a bare version (`1.2.3`).
 /// A tag identifies its own project, which is what lets a CI job pass
 /// `github.ref_name` straight through without knowing which project it names.
+/// Writes an exact version to every tracked file.
+fn set(ctx: &Context, version: &str, dry_run: bool, git_args: &GitArgs) -> Result<Exit, CliError> {
+    let target =
+        app::check::parse_expected(version).map_err(|e| CliError::InvalidVersionArgument {
+            text: version.to_owned(),
+            detail: e.to_string(),
+        })?;
+
+    let project = ctx.config.select(ctx.project.as_deref())?;
+    let intent = git_args.intent(&ctx.config.git);
+    let tag_pattern = ctx.config.tag_pattern_for(project)?;
+
+    let plan = app::bump::set(
+        &ctx.fs,
+        &ctx.root,
+        project,
+        target,
+        app::bump::GitPlanning {
+            intent,
+            commit_message: &ctx.config.git.commit_message,
+            tag: &tag_pattern,
+        },
+    )?;
+
+    if dry_run {
+        render::plan(&plan, ctx.json);
+        return Ok(Exit::Success);
+    }
+
+    // Writing the version the files already record changes nothing, and git
+    // refuses an empty commit, so the run stops here rather than failing at the
+    // commit for a reason that has nothing to do with what was asked.
+    if !plan.changes_anything() {
+        render::unchanged(&plan, ctx.json);
+        return Ok(Exit::Success);
+    }
+
+    let vcs = GitCli::new(&ctx.root);
+    let outcome = app::bump::apply(&ctx.fs, &vcs, &ctx.root, &plan)?;
+    let stale = app::lockfile::detect(&ctx.fs, &ctx.root, &outcome.written);
+    render::bump(&plan, &outcome, &stale, ctx.json);
+
+    Ok(if outcome.push_error.is_some() {
+        Exit::Git
+    } else {
+        Exit::Success
+    })
+}
+
 fn check(ctx: &Context, version: &str) -> Result<Exit, CliError> {
     let (project, expected) =
         if let Some((project, from_tag)) = ctx.config.project_for_tag(version)? {

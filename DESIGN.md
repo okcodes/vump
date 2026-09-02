@@ -221,6 +221,7 @@ vump                      Interactive bump
 vump patch|minor|major    Bump a stable version
 vump alpha|beta|rc        Start or advance a pre-release (--from required from stable)
 vump release              Drop the pre-release suffix
+vump set <version>        Write an exact version to every tracked file
 vump check <version>      Verify tracked files match the given version
 vump status               Report current versions and sync state
 vump init                 Create a vump.toml
@@ -253,6 +254,26 @@ unrelated changes into its commit.
 If push fails after a successful commit or tag, vump reports exactly what did
 succeed and prints the command to finish manually. Partial success must never
 be reported as total failure.
+
+### Setting an exact version
+
+A bump refuses tracked files that disagree, and offers no flag to resolve it
+non-interactively. `set` is the deliberate counterpart: it writes an exact
+version to every tracked file and requires no prior agreement, because
+disagreement is what it repairs.
+
+It does not refuse to move backwards. The reasoning matches `self update --to`:
+a version written out by hand is consent, and refusing would leave no way to
+undo a mistaken bump.
+
+A plan produced by `set` carries no single "current" version when the files
+disagree — reporting one would misdescribe the others — so each file's own
+previous version travels in the per-file changes instead.
+
+Setting the version the files already record is reported as success with
+nothing done. Git refuses an empty commit, so a run that would produce no
+change stops before reaching it rather than failing for a reason unrelated to
+what was asked.
 
 ## 5. Output and exit codes
 

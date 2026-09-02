@@ -411,6 +411,113 @@ fn a_bump_with_no_lock_files_reports_none() {
     );
 }
 
+// ─── Setting an exact version ────────────────────────────────────────────────
+
+#[test]
+fn set_repairs_files_that_a_bump_refuses() {
+    // The dead end this command exists for: `patch` exits 5 here, and the only
+    // other repair was editing by hand.
+    let fx = Fixture::new()
+        .write("vump.toml", "files = [\"VERSION\", \"Cargo.toml\"]\n")
+        .write("VERSION", "1.2.3\n")
+        .write("Cargo.toml", "[package]\nversion = \"0.9.0\"\n");
+
+    assert_eq!(fx.run(&["patch", "--no-git"]).code, 5);
+
+    let run = fx.run(&["set", "2.0.0", "--no-git"]);
+    assert_eq!(run.code, 0, "{}", run.output());
+    assert_eq!(fx.read("VERSION"), "2.0.0\n");
+    assert!(fx.read("Cargo.toml").contains("2.0.0"));
+
+    // Repaired, so an ordinary bump works again.
+    assert_eq!(fx.run(&["patch", "--no-git"]).code, 0);
+    assert_eq!(fx.read("VERSION"), "2.0.1\n");
+}
+
+#[test]
+fn set_accepts_a_v_prefix() {
+    let fx = Fixture::new()
+        .write("vump.toml", SINGLE)
+        .write("VERSION", "1.0.0\n");
+
+    assert_eq!(fx.run(&["set", "v2.5.0", "--no-git"]).code, 0);
+    assert_eq!(fx.read("VERSION"), "2.5.0\n");
+}
+
+#[test]
+fn set_moves_backwards_without_complaint() {
+    let fx = Fixture::new()
+        .write("vump.toml", SINGLE)
+        .write("VERSION", "2.0.0\n");
+
+    assert_eq!(fx.run(&["set", "1.0.0", "--no-git"]).code, 0);
+    assert_eq!(fx.read("VERSION"), "1.0.0\n");
+}
+
+#[test]
+fn setting_the_recorded_version_is_a_no_op_not_a_failure() {
+    // Configuration asks for a commit, and git refuses an empty one. The run
+    // must report success rather than fail for a reason unrelated to the ask.
+    let fx = Fixture::new()
+        .write("vump.toml", "files = [\"VERSION\"]\n[git]\ncommit = true\n")
+        .write("VERSION", "1.2.3\n")
+        .with_git();
+
+    let run = fx.run(&["set", "1.2.3"]);
+    assert_eq!(run.code, 0, "{}", run.output());
+    assert!(run.stdout.contains("nothing to do"), "{}", run.stdout);
+    assert!(fx.tags().is_empty());
+}
+
+#[test]
+fn set_commits_and_tags_like_a_bump() {
+    let fx = Fixture::new()
+        .write("vump.toml", SINGLE)
+        .write("VERSION", "1.0.0\n")
+        .with_git();
+
+    assert_eq!(fx.run(&["set", "4.5.6", "--tag"]).code, 0);
+    assert_eq!(fx.tags(), ["v4.5.6"]);
+}
+
+#[test]
+fn set_honours_dry_run() {
+    let fx = Fixture::new()
+        .write("vump.toml", SINGLE)
+        .write("VERSION", "1.0.0\n");
+
+    let run = fx.run(&["set", "9.9.9", "--dry-run", "--no-git"]);
+    assert_eq!(run.code, 0, "{}", run.output());
+    assert_eq!(fx.read("VERSION"), "1.0.0\n");
+    assert!(run.stdout.contains("9.9.9"));
+}
+
+#[test]
+fn set_reports_each_files_previous_version_as_json() {
+    let fx = Fixture::new()
+        .write("vump.toml", "files = [\"VERSION\", \"Cargo.toml\"]\n")
+        .write("VERSION", "1.2.3\n")
+        .write("Cargo.toml", "[package]\nversion = \"0.9.0\"\n");
+
+    let value = fx.run(&["set", "2.0.0", "--no-git", "--json"]).json();
+
+    assert_eq!(value["version"], "2.0.0");
+    // Files disagreed, so there is no single version they moved from.
+    assert!(value["previous"].is_null());
+    assert_eq!(value["changes"][0]["from"], "1.2.3");
+    assert_eq!(value["changes"][1]["from"], "0.9.0");
+}
+
+#[test]
+fn a_malformed_set_argument_exits_two() {
+    let fx = Fixture::new()
+        .write("vump.toml", SINGLE)
+        .write("VERSION", "1.0.0\n");
+
+    assert_eq!(fx.run(&["set", "not-a-version", "--no-git"]).code, 2);
+    assert_eq!(fx.read("VERSION"), "1.0.0\n");
+}
+
 // ─── Initialization ──────────────────────────────────────────────────────────
 
 #[test]

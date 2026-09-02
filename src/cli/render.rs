@@ -164,10 +164,23 @@ pub fn summary(plan: &BumpPlan) -> String {
     if let Some(project) = plan.project.as_deref() {
         let _ = writeln!(out, "  Project:  {project}");
     }
-    let _ = writeln!(out, "  Bumping:  {}  ->  {}", plan.current, plan.next);
+    match plan.current.as_ref() {
+        Some(current) => {
+            let _ = writeln!(out, "  Bumping:  {current}  ->  {}", plan.next);
+        }
+        // Files disagree, so there is no single version being moved from; each
+        // file's own is listed below.
+        None => {
+            let _ = writeln!(out, "  Setting:  {}", plan.next);
+        }
+    }
 
     for change in &plan.changes {
-        let _ = writeln!(out, "  File:     {}", change.path);
+        if plan.current.is_some() {
+            let _ = writeln!(out, "  File:     {}", change.path);
+        } else {
+            let _ = writeln!(out, "  File:     {}  ({})", change.path, change.from);
+        }
     }
     if let Some(message) = plan.git.commit.as_deref() {
         let _ = writeln!(out, "  Commit:   {message}");
@@ -192,7 +205,7 @@ pub fn plan(plan: &BumpPlan, json: bool) {
             "ok": true,
             "dry_run": true,
             "project": plan.project,
-            "current": plan.current.to_string(),
+            "current": plan.current.as_ref().map(ToString::to_string),
             "next": plan.next.to_string(),
             "changes": changes_json(plan),
             "git": git_json(plan),
@@ -200,7 +213,10 @@ pub fn plan(plan: &BumpPlan, json: bool) {
         return;
     }
 
-    println!("{} -> {}  (dry run)", plan.current, plan.next);
+    match plan.current.as_ref() {
+        Some(current) => println!("{current} -> {}  (dry run)", plan.next),
+        None => println!("-> {}  (dry run)", plan.next),
+    }
     println!();
     for change in &plan.changes {
         println!("  would write  {}", change.path);
@@ -210,6 +226,32 @@ pub fn plan(plan: &BumpPlan, json: bool) {
     println!("Nothing was written.");
 }
 
+/// Renders a run that found nothing to do.
+///
+/// Reported as success rather than as an error: the files record the version
+/// that was asked for, which is the outcome the caller wanted.
+pub fn unchanged(plan: &BumpPlan, json: bool) {
+    if json {
+        print(&json!({
+            "command": "set",
+            "ok": true,
+            "changed": false,
+            "project": plan.project,
+            "version": plan.next.to_string(),
+            "changes": [],
+        }));
+        return;
+    }
+
+    let marks = Marks::detect();
+    let count = plan.changes.len();
+    let subject = if count == 1 { "file" } else { "files" };
+    println!(
+        "{} {count} {subject} already record {}; nothing to do",
+        marks.ok, plan.next
+    );
+}
+
 /// Renders a completed bump.
 pub fn bump(plan: &BumpPlan, outcome: &BumpOutcome, stale: &[StaleLock], json: bool) {
     if json {
@@ -217,7 +259,7 @@ pub fn bump(plan: &BumpPlan, outcome: &BumpOutcome, stale: &[StaleLock], json: b
             "command": "bump",
             "ok": outcome.push_error.is_none(),
             "project": plan.project,
-            "previous": plan.current.to_string(),
+            "previous": plan.current.as_ref().map(ToString::to_string),
             "version": plan.next.to_string(),
             "changes": changes_json(plan),
             "git": {
@@ -235,7 +277,10 @@ pub fn bump(plan: &BumpPlan, outcome: &BumpOutcome, stale: &[StaleLock], json: b
 
     let marks = Marks::detect();
 
-    println!("{} {} -> {}", marks.ok, plan.current, plan.next);
+    match plan.current.as_ref() {
+        Some(current) => println!("{} {current} -> {}", marks.ok, plan.next),
+        None => println!("{} set to {}", marks.ok, plan.next),
+    }
     for path in &outcome.written {
         println!("  {path}");
     }

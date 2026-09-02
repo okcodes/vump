@@ -18,26 +18,7 @@ starting point, not a specification — expect it to change while building.
 
 Ranked by value.
 
-### 1. Set an exact version
-
-**Problem.** There is no way to say "make everything 1.4.0". Files that
-disagree are a dead end in non-interactive mode: vump reports the
-disagreement and stops, and the only repair is editing by hand.
-
-**Why it matters.** Repair and onboarding both need it — adopting vump in a
-repository whose files never agreed currently requires fixing them manually
-first.
-
-**Shape.** `vump set <version>`, writing every tracked file to exactly that
-version. Same git integration as a bump. It should not need the files to agree
-beforehand, since disagreement is precisely what it repairs.
-
-**Open questions.**
-
-- Should it refuse to move backwards without a flag? Probably not — an exact
-  version was named, which is consent, matching `self update --to`.
-
-### 2. Annotated and signed tags
+### 1. Annotated and signed tags
 
 **Problem.** Tags are created with `git tag <name>`, which makes a lightweight
 tag: a bare pointer with no tagger, date, or message.
