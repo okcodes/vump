@@ -111,8 +111,7 @@ supported format.
 The common case carries no ceremony:
 
 ```toml
-[[files]]
-path = "Cargo.toml"
+files = ["Cargo.toml"]
 ```
 
 ### Multi-project repository
@@ -201,7 +200,9 @@ vump release              Drop the pre-release suffix
 vump check <version>      Verify tracked files match the given version
 vump status               Report current versions and sync state
 vump init                 Create a vump.toml
-vump update               Replace the running binary with the latest release
+vump self update          Install a published release
+vump self status          Report whether a newer release exists
+vump self list            List published releases
 ```
 
 ### Flags
@@ -305,9 +306,30 @@ Rules that keep the boundaries real:
   first, then replaced. That platform difference is delegated to a library
   rather than reimplemented. Downgrades are refused: a development build ahead
   of the last release must never be overwritten by it.
-- **Release discovery** uses the endpoint that excludes pre-releases, so an
-  alpha never presents itself as an upgrade to someone on a stable build. This
-  pairs with the release workflow publishing pre-release tags as pre-releases.
+- **Release discovery** reads the full release list rather than the endpoint
+  that returns only the latest non-pre-release, because that endpoint answers
+  one channel's question. Maturity is derived from each version itself, so it
+  cannot disagree with how a release happened to be flagged when published.
+
+### Release channels
+
+`--channel` names the *least mature* release that may be installed, defaulting
+to stable. It is a floor rather than an exact match, and the distinction
+matters: semver compares the version core before the pre-release, so
+`1.1.0-alpha.0` outranks `1.0.0-rc.5`. Taking simply the newest pre-release
+would move someone tracking release candidates onto the next minor's first
+alpha — a version upgrade but a stability downgrade.
+
+A pre-release whose label vump does not recognize is never offered on any
+channel: without a rank there is no way to judge it against a floor.
+
+The floor is per-invocation and deliberately not remembered. Persisting it
+would require installation-level state, which the tool otherwise has no need
+for, and one setting does not justify introducing it.
+
+`--to <version>` installs exactly the version named, bypassing both the channel
+and the refusal to downgrade. That is what makes a rollback expressible, and it
+is safe to allow because the caller had to write the version out.
 
 ### Dependency notes
 

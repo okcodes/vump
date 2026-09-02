@@ -14,6 +14,7 @@ use thiserror::Error;
 
 use crate::adapters::{GitCli, GitHubReleases, RealFileSystem, TerminalInteraction};
 use crate::app::bump::{BumpError, GitFlags, GitIntent};
+use crate::app::update::Channel;
 use crate::app::{self, AppError};
 use crate::config::{Config, ConfigError};
 use crate::domain::{PreLabel, StableBump, Transition, TransitionError};
@@ -105,12 +106,75 @@ enum Command {
         force: bool,
     },
 
-    /// Replace this binary with the newest release.
+    /// Manage this installation of vump.
+    ///
+    /// These act on the binary rather than on a project, and so need no
+    /// vump.toml.
+    ///
+    /// The variant cannot be called `Self`, which is a reserved word, so the
+    /// command name is set explicitly rather than derived from it.
+    #[command(subcommand, name = "self")]
+    SelfCmd(SelfCommand),
+}
+
+/// Operations on the vump installation itself.
+#[derive(Debug, Subcommand)]
+enum SelfCommand {
+    /// Replace this binary with a published release.
     Update {
-        /// Report whether a newer release exists without installing it.
-        #[arg(long)]
-        check: bool,
+        /// Install this exact version, newer or older.
+        ///
+        /// Naming a version bypasses the channel and the refusal to downgrade,
+        /// which is how a rollback is expressed.
+        #[arg(long, value_name = "VERSION")]
+        to: Option<String>,
+
+        /// Least mature kind of release to accept.
+        #[arg(long, value_name = "CHANNEL", default_value = "stable")]
+        channel: ChannelArg,
     },
+
+    /// Report the running version and whether a newer one is published.
+    Status {
+        /// Least mature kind of release to consider.
+        #[arg(long, value_name = "CHANNEL", default_value = "stable")]
+        channel: ChannelArg,
+    },
+
+    /// List published releases, marking the running one.
+    List {
+        /// Least mature kind of release to include.
+        #[arg(long, value_name = "CHANNEL", default_value = "stable")]
+        channel: ChannelArg,
+
+        /// Show at most this many, newest first.
+        #[arg(long, value_name = "N")]
+        limit: Option<usize>,
+    },
+}
+
+/// The least mature kind of release to accept.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum ChannelArg {
+    /// Finished releases only.
+    Stable,
+    /// Release candidates and finished releases.
+    Rc,
+    /// Betas and anything more mature.
+    Beta,
+    /// Everything, including alphas.
+    Alpha,
+}
+
+impl From<ChannelArg> for Channel {
+    fn from(arg: ChannelArg) -> Self {
+        match arg {
+            ChannelArg::Stable => Self::Stable,
+            ChannelArg::Rc => Self::Rc,
+            ChannelArg::Beta => Self::Beta,
+            ChannelArg::Alpha => Self::Alpha,
+        }
+    }
 }
 
 /// Options shared by every bump.
@@ -242,7 +306,7 @@ fn execute(cli: &Cli) -> Result<Exit, CliError> {
             render::init(&written, cli.json);
             return Ok(Exit::Success);
         }
-        Some(Command::Update { check }) => return update(*check, cli.json),
+        Some(Command::SelfCmd(command)) => return self_command(command, cli.json),
         _ => {}
     }
 
@@ -291,36 +355,70 @@ fn execute(cli: &Cli) -> Result<Exit, CliError> {
         Command::Check { version } => check(&ctx, version),
         Command::Status => status(&ctx),
         // Handled before configuration discovery.
-        Command::Init { .. } | Command::Update { .. } => Ok(Exit::Success),
+        Command::Init { .. } | Command::SelfCmd(_) => Ok(Exit::Success),
     }
 }
 
-/// Reports on, and optionally installs, the newest release.
-fn update(check_only: bool, json: bool) -> Result<Exit, CliError> {
-    // The running binary's version comes from the manifest it was built from,
-    // which is the same value `check` verifies against the release tag.
-    let current = env!("CARGO_PKG_VERSION")
+/// The version of the running binary.
+///
+/// Taken from the manifest it was built from, which is the same value `check`
+/// verifies against the release tag.
+fn running_version() -> Result<semver::Version, CliError> {
+    env!("CARGO_PKG_VERSION")
         .parse()
         .map_err(|e: semver::Error| CliError::InvalidVersionArgument {
             text: env!("CARGO_PKG_VERSION").to_owned(),
             detail: e.to_string(),
-        })?;
+        })
+}
 
-    let outcome = app::update::update(
-        &GitHubReleases::new(),
-        &current,
-        (std::env::consts::OS, std::env::consts::ARCH),
-        check_only,
-    )?;
+/// Runs a command that acts on the installation rather than on a project.
+fn self_command(command: &SelfCommand, json: bool) -> Result<Exit, CliError> {
+    let current = running_version()?;
+    let source = GitHubReleases::new();
 
-    render::update(&outcome, json);
+    match command {
+        SelfCommand::Status { channel } => {
+            let outcome = app::update::status(&source, &current, (*channel).into())?;
+            render::update(&outcome, json);
 
-    // `--check` is used in scripts to ask whether an update is pending, so the
-    // answer is carried by the exit status as well as by the output.
-    Ok(match outcome {
-        app::update::UpdateOutcome::Available { .. } if check_only => Exit::Failure,
-        _ => Exit::Success,
-    })
+            // Scripts ask this to decide whether to act, so the answer is
+            // carried by the exit status as well as by the output.
+            Ok(match outcome {
+                app::update::UpdateOutcome::Available { .. } => Exit::Failure,
+                _ => Exit::Success,
+            })
+        }
+
+        SelfCommand::List { channel, limit } => {
+            let listing = app::update::list(&source, &current, (*channel).into())?;
+            render::releases(&listing, *limit, json);
+            Ok(Exit::Success)
+        }
+
+        SelfCommand::Update { to, channel } => {
+            let requested = to
+                .as_deref()
+                .map(|text| {
+                    app::check::parse_expected(text).map_err(|e| CliError::InvalidVersionArgument {
+                        text: text.to_owned(),
+                        detail: e.to_string(),
+                    })
+                })
+                .transpose()?;
+
+            let outcome = app::update::update(
+                &source,
+                &current,
+                (std::env::consts::OS, std::env::consts::ARCH),
+                (*channel).into(),
+                requested.as_ref(),
+            )?;
+
+            render::update(&outcome, json);
+            Ok(Exit::Success)
+        }
+    }
 }
 
 /// Guides a bump, asking only what has not already been decided.
@@ -718,5 +816,55 @@ mod tests {
     #[test]
     fn an_unknown_subcommand_is_rejected() {
         assert!(Cli::try_parse_from(["vump", "bogus"]).is_err());
+    }
+
+    #[test]
+    fn installation_commands_live_under_self() {
+        for args in [
+            vec!["vump", "self", "update"],
+            vec!["vump", "self", "status"],
+            vec!["vump", "self", "list"],
+        ] {
+            Cli::try_parse_from(&args).unwrap_or_else(|e| panic!("{args:?} must parse: {e}"));
+        }
+
+        // `self` alone is a group, not an action.
+        assert!(Cli::try_parse_from(["vump", "self"]).is_err());
+    }
+
+    #[test]
+    fn every_channel_is_accepted_and_others_are_not() {
+        for channel in ["stable", "rc", "beta", "alpha"] {
+            Cli::try_parse_from(["vump", "self", "status", "--channel", channel])
+                .unwrap_or_else(|e| panic!("{channel} must parse: {e}"));
+        }
+        assert!(Cli::try_parse_from(["vump", "self", "status", "--channel", "nightly"]).is_err());
+    }
+
+    #[test]
+    fn the_channel_defaults_to_stable() {
+        let cli = Cli::try_parse_from(["vump", "self", "status"]).unwrap();
+        let Some(Command::SelfCmd(SelfCommand::Status { channel })) = cli.command else {
+            panic!("expected self status");
+        };
+        assert!(matches!(channel, ChannelArg::Stable));
+    }
+
+    #[test]
+    fn an_exact_version_can_be_requested() {
+        let cli = Cli::try_parse_from(["vump", "self", "update", "--to", "1.2.3"]).unwrap();
+        let Some(Command::SelfCmd(SelfCommand::Update { to, .. })) = cli.command else {
+            panic!("expected self update");
+        };
+        assert_eq!(to.as_deref(), Some("1.2.3"));
+    }
+
+    #[test]
+    fn listing_accepts_a_limit() {
+        let cli = Cli::try_parse_from(["vump", "self", "list", "--limit", "5"]).unwrap();
+        let Some(Command::SelfCmd(SelfCommand::List { limit, .. })) = cli.command else {
+            panic!("expected self list");
+        };
+        assert_eq!(limit, Some(5));
     }
 }

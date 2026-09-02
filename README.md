@@ -49,6 +49,9 @@ needs, or it fails saying what is missing.
 | `vump check <version>` | Verify tracked files record this version |
 | `vump status` | Report recorded versions and whether they agree |
 | `vump init` | Create a `vump.toml` |
+| `vump self update` | Install a published release |
+| `vump self status` | Running version, and whether a newer one exists |
+| `vump self list` | Published releases, marking the running one |
 
 ## Flags
 
@@ -62,6 +65,8 @@ needs, or it fails saying what is missing.
 | `--no-git` | Do no git actions, overriding `vump.toml` for this run |
 | `--project <name>` | Select a project in a multi-project repository |
 | `--json` | Machine-readable output |
+| `--channel <c>` | `self` commands: least mature release to accept |
+| `--to <version>` | `self update`: install this exact version |
 
 ## Configuration
 
@@ -159,6 +164,38 @@ first, so a bad tag costs nothing:
 | `config` | no | `vump.toml` | Path to `vump.toml` from the repo root |
 | `vump-version` | no | `latest` | Release to download |
 
+## Keeping vump up to date
+
+```bash
+vump self status                    # is there a newer release?
+vump self list --channel rc         # what is published
+vump self update                    # install the newest stable
+vump self update --to 0.3.1         # install exactly this, newer or older
+```
+
+`--channel` names the **least mature** release you will accept, defaulting to
+`stable`:
+
+| `--channel` | Accepts |
+| --- | --- |
+| `stable` | finished releases only |
+| `rc` | release candidates and finished releases |
+| `beta` | betas and anything more mature |
+| `alpha` | everything published |
+
+It is a floor rather than an exact match because semver compares the version
+core before the pre-release: `1.1.0-alpha.0` outranks `1.0.0-rc.5`. Simply
+taking the newest pre-release would move someone tracking release candidates
+onto the next minor's first alpha — a version upgrade but a stability
+downgrade. A floor prevents that.
+
+Maturity is read from the version itself, not from how a release was flagged
+when published, so the two can never disagree.
+
+`--to` installs exactly the version named, whether or not it is newer and
+whether or not the channel would have offered it. That is what makes a rollback
+expressible, and it is safe because you had to write the version out.
+
 ## Scripting and automation
 
 `--json` renders every command's result as structured output, including bump
@@ -214,3 +251,5 @@ cargo fmt --check
 
 [`DESIGN.md`](DESIGN.md) records the intended behavior and architecture, and is
 the authority when the code and your expectations disagree.
+[`BACKLOG.md`](BACKLOG.md) records what is not built yet, and what was decided
+against.

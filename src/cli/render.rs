@@ -12,7 +12,7 @@ use crate::app::bump::{BumpOutcome, BumpPlan};
 use crate::app::check::CheckReport;
 use crate::app::lockfile::StaleLock;
 use crate::app::status::ProjectStatus;
-use crate::app::update::UpdateOutcome;
+use crate::app::update::{Channel, Listing, Release, UpdateOutcome};
 use crate::cli::exit::Exit;
 
 /// Symbols used to mark pass and fail states.
@@ -360,10 +360,10 @@ pub fn init(files: &[String], json: bool) {
     println!("Review it, then run `vump` to bump.");
 }
 
-/// Renders the outcome of an `update`.
+/// Renders the outcome of a `self update` or `self status`.
 pub fn update(outcome: &UpdateOutcome, json: bool) {
     if json {
-        let (state, current, latest) = match outcome {
+        let (state, current, other) = match outcome {
             UpdateOutcome::UpToDate { current } => ("up_to_date", current, None),
             UpdateOutcome::Available { current, latest } => ("available", current, Some(latest)),
             UpdateOutcome::Installed {
@@ -371,14 +371,21 @@ pub fn update(outcome: &UpdateOutcome, json: bool) {
                 installed,
             } => ("installed", previous, Some(installed)),
             UpdateOutcome::Ahead { current, latest } => ("ahead", current, Some(latest)),
+            UpdateOutcome::NoneAvailable { current, .. } => ("none_available", current, None),
+        };
+
+        let channel = match outcome {
+            UpdateOutcome::NoneAvailable { channel, .. } => Some(channel.to_string()),
+            _ => None,
         };
 
         print(&json!({
-            "command": "update",
+            "command": "self",
             "ok": true,
             "state": state,
             "current": current.to_string(),
-            "latest": latest.map(ToString::to_string),
+            "latest": other.map(ToString::to_string),
+            "channel": channel,
         }));
         return;
     }
@@ -387,21 +394,88 @@ pub fn update(outcome: &UpdateOutcome, json: bool) {
 
     match outcome {
         UpdateOutcome::UpToDate { current } => {
-            println!("{} already on the newest release ({current})", marks.ok);
+            println!("{} {current} is the newest release", marks.ok);
         }
         UpdateOutcome::Available { current, latest } => {
             println!("{latest} is available; running {current}.");
-            println!("Run `vump update` to install it.");
+            println!("Run `vump self update` to install it.");
         }
         UpdateOutcome::Installed {
             previous,
             installed,
         } => {
-            println!("{} updated {previous} -> {installed}", marks.ok);
+            // Naming an older version explicitly is a rollback, and calling it
+            // an update would misdescribe what just happened.
+            let verb = if installed < previous {
+                "rolled back"
+            } else {
+                "updated"
+            };
+            println!("{} {verb} {previous} -> {installed}", marks.ok);
         }
         UpdateOutcome::Ahead { current, latest } => {
             println!("{current} is newer than the newest release ({latest}); nothing to do.");
         }
+        UpdateOutcome::NoneAvailable { current, channel } => {
+            println!("no {channel} release is published; running {current}.");
+            if *channel == Channel::Stable {
+                println!("Pass --channel rc, beta, or alpha to consider pre-releases.");
+            }
+        }
+    }
+}
+
+/// Renders the list of published releases, marking the running one.
+pub fn releases(listing: &Listing, limit: Option<usize>, json: bool) {
+    let shown: Vec<&Release> = listing
+        .releases
+        .iter()
+        .take(limit.unwrap_or(usize::MAX))
+        .collect();
+
+    if json {
+        print(&json!({
+            "command": "self list",
+            "ok": true,
+            "current": listing.current.to_string(),
+            "releases": shown.iter().map(|r| json!({
+                "version": r.version.to_string(),
+                "tag": r.tag,
+                "current": r.version == listing.current,
+            })).collect::<Vec<_>>(),
+        }));
+        return;
+    }
+
+    if shown.is_empty() {
+        println!("no releases match.");
+        return;
+    }
+
+    let width = shown
+        .iter()
+        .map(|r| r.version.to_string().len())
+        .max()
+        .unwrap_or_default();
+
+    for release in shown {
+        let marker = if release.version == listing.current {
+            "*"
+        } else {
+            " "
+        };
+        println!("{marker} {:<width$}", release.version.to_string());
+    }
+
+    // The running version may be a development build that was never published,
+    // in which case nothing above is marked and saying so avoids confusion.
+    if !listing
+        .releases
+        .iter()
+        .any(|r| r.version == listing.current)
+    {
+        println!();
+        println!("running {} (not a published release)", listing.current);
     }
 }
 
