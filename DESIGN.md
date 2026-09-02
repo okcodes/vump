@@ -346,6 +346,22 @@ Rules that keep the boundaries real:
   Read-only commands (`self status`, `self list`) download nothing and so
   require nothing to verify.
 
+- **Release provenance is attested.** Checksums prove an artifact arrived
+  intact; they cannot prove it was built here, since anyone able to upload to a
+  release could publish a matching listing beside a binary of their choosing.
+  Each release therefore also carries a SLSA provenance attestation, signed
+  with a short-lived certificate derived from the release workflow's own OIDC
+  identity and recorded in a public transparency log. An artifact uploaded out
+  of band cannot carry a valid one, and there is no long-lived key to store,
+  rotate or leak.
+
+  Verification is available to anyone — `gh attestation verify <file> --repo
+  okcodes/vump` — but is not what the tooling enforces. Checksums are, because
+  they need only `curl` and a hash utility, whereas checking an attestation
+  needs a recent `gh`. Requiring it would trade the CI action's portability,
+  including onto self-hosted runners, for a guarantee that publishing alone
+  already makes available to those who want it.
+
 - **Release discovery** reads the full release list rather than the endpoint
   that returns only the latest non-pre-release, because that endpoint answers
   one channel's question. Maturity is derived from each version itself, so it
