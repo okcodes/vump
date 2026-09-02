@@ -251,3 +251,5 @@ cargo fmt --check
 
 [`DESIGN.md`](DESIGN.md) records the intended behavior and architecture, and is
 the authority when the code and your expectations disagree.
+[`BACKLOG.md`](BACKLOG.md) records what is not built yet, and what was decided
+against.
