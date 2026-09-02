@@ -1,6 +1,6 @@
 [package]
 name = "vump"
-version = "0.2.0-alpha.3"
+version = "0.2.0-alpha.5"
 edition = "2024"
 rust-version = "1.85"
 description = "Keep semver version numbers in sync across a repository, and verify them in CI"
@@ -14,6 +14,7 @@ self-replace = "1.5.0"
 semver = "1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+sha2 = "0.11.0"
 thiserror = "2"
 toml = "1.1.4"
 toml_edit = "0.25.13"

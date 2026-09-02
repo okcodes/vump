@@ -330,6 +330,38 @@ Rules that keep the boundaries real:
   first, then replaced. That platform difference is delegated to a library
   rather than reimplemented. Downgrades are refused: a development build ahead
   of the last release must never be overwritten by it.
+- **Downloaded artifacts are verified.** Every release publishes a `SHA256SUMS`
+  asset; self-update and the CI action both check what arrived against it
+  before writing to disk or executing. The digests are computed *after*
+  signing, since signing rewrites the macOS binary and a digest taken earlier
+  would describe an artifact nobody receives.
+
+  A release publishing no checksums is refused rather than installed with a
+  warning. This is the highest-privilege path in the project — it downloads a
+  binary and then runs it as the user, and in CI inside a job holding signing
+  secrets — and a warning on that path is not a safeguard. The cost is that
+  releases predating checksums cannot be installed by `self update`, which is
+  accepted.
+
+  Read-only commands (`self status`, `self list`) download nothing and so
+  require nothing to verify.
+
+- **Release provenance is attested.** Checksums prove an artifact arrived
+  intact; they cannot prove it was built here, since anyone able to upload to a
+  release could publish a matching listing beside a binary of their choosing.
+  Each release therefore also carries a SLSA provenance attestation, signed
+  with a short-lived certificate derived from the release workflow's own OIDC
+  identity and recorded in a public transparency log. An artifact uploaded out
+  of band cannot carry a valid one, and there is no long-lived key to store,
+  rotate or leak.
+
+  Verification is available to anyone — `gh attestation verify <file> --repo
+  okcodes/vump` — but is not what the tooling enforces. Checksums are, because
+  they need only `curl` and a hash utility, whereas checking an attestation
+  needs a recent `gh`. Requiring it would trade the CI action's portability,
+  including onto self-hosted runners, for a guarantee that publishing alone
+  already makes available to those who want it.
+
 - **Release discovery** reads the full release list rather than the endpoint
   that returns only the latest non-pre-release, because that endpoint answers
   one channel's question. Maturity is derived from each version itself, so it

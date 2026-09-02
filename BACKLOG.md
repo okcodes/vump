@@ -18,31 +18,7 @@ starting point, not a specification — expect it to change while building.
 
 Ranked by value.
 
-### 1. Verify downloaded release artifacts
-
-**Problem.** `download-vump.sh` fetches a binary over HTTPS and executes it in
-CI, where the Apple signing certificate and keychain password are in scope.
-There is no integrity check. `vump self update` has the same shape: download,
-mark executable, replace the running binary. macOS artifacts are notarized;
-Linux and Windows have nothing.
-
-**Why it matters.** This is the highest-privilege code path in the project. A
-compromised or truncated download is executed with secrets available.
-
-**Shape.** Publish a `SHA256SUMS` asset from the release workflow, alongside
-the binaries. Verify it in `download-vump.sh` and in the self-update adapter
-before replacing anything. Failing the check must abort, not warn.
-
-**Open questions.**
-
-- Signing the checksum file itself is the stronger version, but needs a key
-  and somewhere to publish it. Plain checksums close the truncation and
-  tampering-in-transit cases and are worth having regardless.
-- Should `self update` refuse outright when no checksum is published for a
-  release, or fall back with a warning? Refusing is safer; it breaks updating
-  *to* older releases that predate the checksums.
-
-### 2. Set an exact version
+### 1. Set an exact version
 
 **Problem.** There is no way to say "make everything 1.4.0". Files that
 disagree are a dead end in non-interactive mode: vump reports the
@@ -61,7 +37,7 @@ beforehand, since disagreement is precisely what it repairs.
 - Should it refuse to move backwards without a flag? Probably not — an exact
   version was named, which is consent, matching `self update --to`.
 
-### 3. Annotated and signed tags
+### 2. Annotated and signed tags
 
 **Problem.** Tags are created with `git tag <name>`, which makes a lightweight
 tag: a bare pointer with no tagger, date, or message.
@@ -101,6 +77,22 @@ The tension: "vump never runs a package manager" is a firm non-goal, and rightly
 so. But editing the lock's *own* entry is not resolving dependencies — it is the
 same in-place version edit vump already performs on manifests. Whether that
 distinction is real enough to act on is undecided.
+
+### Enforcing provenance verification, not just publishing it
+
+Releases carry a signed provenance attestation, and anyone can check it with
+`gh attestation verify`. Nothing in the tooling *requires* that check: the CI
+action and self-update both enforce checksums instead.
+
+The reason is portability, not doubt about the value. Checksums need only
+`curl` and a hash utility, both present anywhere the action runs, self-hosted
+runners included. Verifying an attestation needs a recent `gh`, and verifying
+one from `vump self update` would need a Sigstore implementation in Rust — the
+crates are immature — or shelling out to `gh`, which a user's machine may not
+have.
+
+Worth revisiting if the Rust Sigstore ecosystem matures, or if the action's
+consumers are known to have `gh` available.
 
 ### Remembering an update channel
 

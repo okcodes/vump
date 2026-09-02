@@ -224,6 +224,18 @@ when published, so the two can never disagree.
 whether or not the channel would have offered it. That is what makes a rollback
 expressible, and it is safe because you had to write the version out.
 
+### Downloads are verified
+
+Every release publishes a `SHA256SUMS` asset. `vump self update` and the CI
+action both check what they downloaded against it before the binary is written
+to disk or run.
+
+A release that publishes no checksums is **refused, not warned about** — this
+is the path that downloads a binary and then executes it, and in CI it does so
+in a job that can hold signing secrets. Releases published before checksums
+existed therefore cannot be installed by `self update`; download them by hand
+if you need one.
+
 ## Scripting and automation
 
 `--json` renders every command's result as structured output, including bump
@@ -248,9 +260,16 @@ Exit codes are a stable contract:
 | 6 | Working tree dirty |
 | 7 | Invalid version transition |
 | 8 | Git operation failed |
+| 9 | A release artifact could not be trusted |
+| 10 | A release could not be obtained |
 
 A push that fails after a successful commit and tag exits 8 and prints the
 command to finish by hand — partial success is never reported as total failure.
+
+9 and 10 separate the two ways `self update` can fail to install: 9 means the
+artifact could not be trusted and warrants looking into, while 10 means it
+could not be fetched and may well succeed on a retry or with a different
+version.
 
 ## Safety
 

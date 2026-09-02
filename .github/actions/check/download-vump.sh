@@ -36,9 +36,48 @@ else
 fi
 
 DEST="${RUNNER_TEMP}/vump-${TAG}"
+SUMS="${RUNNER_TEMP}/vump-${TAG}.SHA256SUMS"
+BASE="https://github.com/okcodes/vump/releases/download/${TAG}"
+
 echo "Downloading vump ${TAG} (${BINARY}) → ${DEST}"
-curl -fsSLo "$DEST" \
-  "https://github.com/okcodes/vump/releases/download/${TAG}/${BINARY}"
+curl -fsSLo "$DEST" "${BASE}/${BINARY}"
+
+# This binary is about to be executed inside a job that can hold signing
+# secrets, so what arrived is checked against what was published before it is
+# allowed to run. A release with no published digests is refused rather than
+# trusted: warning and continuing would not be a safeguard.
+echo "Verifying against published checksums"
+# Errors are silenced here (-S dropped) because a missing SHA256SUMS is an
+# expected outcome with its own message below; curl's raw 404 would only bury
+# it in the log.
+if ! curl -fsLo "$SUMS" "${BASE}/SHA256SUMS" 2>/dev/null; then
+  echo "::error::vump ${TAG} publishes no SHA256SUMS; refusing to run an unverified binary."
+  echo "::error::Pin vump-version to a release that publishes checksums."
+  exit 1
+fi
+
+EXPECTED=$(grep -E "[[:space:]][*]?${BINARY}\$" "$SUMS" | awk '{print $1}' | head -1)
+if [[ -z "$EXPECTED" ]]; then
+  echo "::error::SHA256SUMS for ${TAG} lists no digest for ${BINARY}; refusing to run it."
+  exit 1
+fi
+
+# Prefer the coreutils tool, falling back to the BSD one on macOS runners.
+if command -v sha256sum >/dev/null 2>&1; then
+  ACTUAL=$(sha256sum "$DEST" | awk '{print $1}')
+else
+  ACTUAL=$(shasum -a 256 "$DEST" | awk '{print $1}')
+fi
+
+if [[ "$ACTUAL" != "$EXPECTED" ]]; then
+  echo "::error::${BINARY} does not match its published checksum."
+  echo "::error::expected ${EXPECTED}"
+  echo "::error::received ${ACTUAL}"
+  rm -f "$DEST"
+  exit 1
+fi
+echo "  ✓ checksum verified"
+
 chmod +x "$DEST"
 
 # Export the full path — next steps use $VUMP_BIN directly, never assume PATH.

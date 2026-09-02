@@ -773,7 +773,18 @@ impl CliError {
             // Updating touches the installation rather than a project, so
             // nothing about it maps onto the project-shaped codes. Neither does
             // failing to resolve the working directory.
-            Self::Update(_) | Self::WorkingDirectory(_) => Exit::Failure,
+            Self::WorkingDirectory(_) => Exit::Failure,
+            Self::Update(update) => match update {
+                // A caller seeing this should investigate rather than retry.
+                app::update::UpdateError::Unverifiable { .. }
+                | app::update::UpdateError::Corrupt(_) => Exit::Unverifiable,
+                // These may succeed on a retry, or with a different version.
+                app::update::UpdateError::Unreachable { .. }
+                | app::update::UpdateError::NoSuchRelease { .. }
+                | app::update::UpdateError::UnsupportedPlatform { .. } => Exit::ReleaseUnavailable,
+                app::update::UpdateError::UnknownChannel(_) => Exit::Usage,
+                app::update::UpdateError::InstallFailed { .. } => Exit::Failure,
+            },
             Self::Init(init) => match init {
                 app::init::InitError::Filesystem(FsError::Io { .. }) => Exit::Failure,
                 app::init::InitError::AlreadyExists { .. }

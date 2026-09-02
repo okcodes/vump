@@ -116,6 +116,10 @@ jobs:
     needs: build
     runs-on: macos-latest
     environment: Production-Signing
+    permissions:
+      contents: write      # create the release and upload assets
+      id-token: write      # mint the short-lived Sigstore signing identity
+      attestations: write  # record the provenance attestation
     env:
       KEYCHAIN_NAME: ci-signing-${{ github.run_id }}.keychain
 
@@ -156,6 +160,49 @@ jobs:
           chmod +x notarize.sh
           ./notarize.sh
 
+      # Computed after signing, which rewrites the macOS binary: a digest taken
+      # before it would describe an artifact nobody receives. Only the assets
+      # actually published are listed, so a digest exists for exactly what a
+      # consumer can download.
+      - name: Publish checksums
+        working-directory: dist
+        run: |
+          shasum -a 256 \
+            vump-darwin-universal \
+            vump-linux-amd64 \
+            vump-linux-arm64 \
+            vump-windows-amd64.exe \
+            vump-windows-arm64.exe \
+            > SHA256SUMS
+
+          echo "Published digests:"
+          cat SHA256SUMS
+
+          # Guards against a silently empty or partial listing, which would
+          # otherwise publish a release that verification cannot use.
+          test "$(wc -l < SHA256SUMS)" -eq 5
+
+      # Checksums prove an artifact arrived intact. They cannot prove it was
+      # built here: anyone able to upload to a release could publish a matching
+      # SHA256SUMS beside a binary of their choosing.
+      #
+      # A provenance attestation closes that. It is signed with a short-lived
+      # certificate derived from this workflow's own OIDC identity and recorded
+      # in a public transparency log, so an artifact uploaded out of band cannot
+      # carry a valid one. There is no long-lived key to store, rotate or leak.
+      #
+      # Anyone can check it with:
+      #   gh attestation verify <file> --repo ${{ github.repository }}
+      - name: Attest build provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            dist/vump-darwin-universal
+            dist/vump-linux-amd64
+            dist/vump-linux-arm64
+            dist/vump-windows-amd64.exe
+            dist/vump-windows-arm64.exe
+
       # The per-architecture macOS slices are intentionally not published: the
       # universal binary supersedes them and is the only notarized artifact.
       - name: Create GitHub Release and upload binaries
@@ -177,6 +224,7 @@ jobs:
             --title "vump $TAG" \
             --generate-notes \
             "${PRERELEASE[@]}" \
+            dist/SHA256SUMS \
             dist/vump-darwin-universal \
             dist/vump-linux-amd64 \
             dist/vump-linux-arm64 \
