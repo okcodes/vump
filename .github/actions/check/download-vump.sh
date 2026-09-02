@@ -47,7 +47,10 @@ curl -fsSLo "$DEST" "${BASE}/${BINARY}"
 # allowed to run. A release with no published digests is refused rather than
 # trusted: warning and continuing would not be a safeguard.
 echo "Verifying against published checksums"
-if ! curl -fsSLo "$SUMS" "${BASE}/SHA256SUMS"; then
+# Errors are silenced here (-S dropped) because a missing SHA256SUMS is an
+# expected outcome with its own message below; curl's raw 404 would only bury
+# it in the log.
+if ! curl -fsLo "$SUMS" "${BASE}/SHA256SUMS" 2>/dev/null; then
   echo "::error::vump ${TAG} publishes no SHA256SUMS; refusing to run an unverified binary."
   echo "::error::Pin vump-version to a release that publishes checksums."
   exit 1
