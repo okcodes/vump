@@ -1,21 +1,26 @@
-//! Replacing the running binary with the newest release.
+//! Inspecting published releases and replacing the running binary.
 //!
-//! The comparison and asset-naming rules are pure and tested here. Fetching and
-//! replacing are behind the [`ReleaseSource`] port, so the interesting decisions
-//! — is this newer, which asset applies, should anything happen at all — are
-//! exercised without a network.
+//! Selection, filtering and the decision to act are pure and tested here.
+//! Fetching and replacing sit behind the [`ReleaseSource`] port, so every
+//! interesting question — which releases qualify, which is newest, is acting on
+//! it an upgrade at all — is exercised without a network.
+
+use std::fmt;
+use std::str::FromStr;
 
 use semver::Version;
 use thiserror::Error;
 
+use crate::domain::PreLabel;
+
 /// Where releases are published and how the running binary is replaced.
 pub trait ReleaseSource {
-    /// Reports the newest published release.
+    /// Lists published releases, in no particular order.
     ///
     /// # Errors
     ///
-    /// Returns [`UpdateError`] when the release cannot be determined.
-    fn latest(&self) -> Result<Release, UpdateError>;
+    /// Returns [`UpdateError`] when releases cannot be listed.
+    fn list(&self) -> Result<Vec<Release>, UpdateError>;
 
     /// Downloads `asset` from `release` and replaces the running binary.
     ///
@@ -28,28 +33,104 @@ pub trait ReleaseSource {
 /// A published release.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Release {
-    /// The tag, as published, which may carry a leading `v`.
+    /// The tag as published, which may carry a leading `v`. It forms the
+    /// download URL, so it is kept verbatim rather than normalized.
     pub tag: String,
     /// The version parsed from the tag.
     pub version: Version,
 }
 
+/// The least mature kind of release that may be offered.
+///
+/// This is a floor, not an exact match: asking for [`Channel::Rc`] accepts
+/// release candidates *and* stable releases, because a stable release is
+/// strictly more mature than the candidates that preceded it.
+///
+/// A floor is necessary because semver compares the version core before the
+/// pre-release: `1.1.0-alpha.0` outranks `1.0.0-rc.5`. Simply taking the
+/// newest pre-release would move someone tracking release candidates onto the
+/// next minor's first alpha — a version upgrade but a stability downgrade.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Channel {
+    /// Only releases with no pre-release suffix.
+    #[default]
+    Stable,
+    /// Release candidates and stable releases.
+    Rc,
+    /// Betas and anything more mature.
+    Beta,
+    /// Any recognized release, including alphas.
+    Alpha,
+}
+
+impl Channel {
+    /// Whether a version is mature enough for this channel.
+    ///
+    /// A pre-release vump does not recognize is never offered: without a rank
+    /// there is no way to judge it against the floor.
+    #[must_use]
+    pub fn accepts(self, version: &Version) -> bool {
+        if version.pre.is_empty() {
+            return true;
+        }
+
+        let Some(floor) = self.floor() else {
+            return false;
+        };
+
+        label_of(version).is_some_and(|label| label >= floor)
+    }
+
+    /// The least mature pre-release label accepted, or `None` for stable only.
+    fn floor(self) -> Option<PreLabel> {
+        match self {
+            Self::Stable => None,
+            Self::Rc => Some(PreLabel::Rc),
+            Self::Beta => Some(PreLabel::Beta),
+            Self::Alpha => Some(PreLabel::Alpha),
+        }
+    }
+}
+
+impl fmt::Display for Channel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Stable => "stable",
+            Self::Rc => "rc",
+            Self::Beta => "beta",
+            Self::Alpha => "alpha",
+        })
+    }
+}
+
+impl FromStr for Channel {
+    type Err = UpdateError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "stable" => Ok(Self::Stable),
+            "rc" => Ok(Self::Rc),
+            "beta" => Ok(Self::Beta),
+            "alpha" => Ok(Self::Alpha),
+            other => Err(UpdateError::UnknownChannel(other.to_owned())),
+        }
+    }
+}
+
+/// Reads the pre-release label of a version, if it carries a recognized one.
+fn label_of(version: &Version) -> Option<PreLabel> {
+    let text = version.pre.as_str();
+    let name = text.split_once('.').map_or(text, |(name, _)| name);
+    name.parse().ok()
+}
+
 /// Why an update could not be performed.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum UpdateError {
-    /// The release list could not be reached or understood.
-    #[error("cannot determine the latest release: {detail}")]
+    /// Releases could not be reached or understood.
+    #[error("cannot list releases: {detail}")]
     Unreachable {
         /// Underlying error detail.
-        detail: String,
-    },
-
-    /// A published tag is not a version.
-    #[error("published tag {tag:?} is not a version: {detail}")]
-    UnreadableTag {
-        /// The tag that could not be parsed.
-        tag: String,
-        /// Parser-supplied detail.
         detail: String,
     },
 
@@ -62,6 +143,19 @@ pub enum UpdateError {
         arch: String,
     },
 
+    /// An explicitly requested version is not published.
+    #[error("no release {requested}; published releases are: {available}")]
+    NoSuchRelease {
+        /// The version asked for.
+        requested: Version,
+        /// Comma-separated list of what does exist.
+        available: String,
+    },
+
+    /// A channel name outside the supported set.
+    #[error("unknown channel {0:?}; expected stable, rc, beta, or alpha")]
+    UnknownChannel(String),
+
     /// The download or replacement failed.
     #[error("cannot install {asset}: {detail}")]
     InstallFailed {
@@ -72,73 +166,145 @@ pub enum UpdateError {
     },
 }
 
-/// What an update run concluded.
+/// What an update or status run concluded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateOutcome {
-    /// The running version is the newest published one.
+    /// The running version is the newest in the channel.
     UpToDate {
         /// The version in use.
         current: Version,
     },
-    /// A newer release exists and was not installed, because only a check was
-    /// requested.
+    /// A newer release exists and was not installed.
     Available {
         /// The version in use.
         current: Version,
         /// The newer published version.
         latest: Version,
     },
-    /// A newer release was installed.
+    /// A release was installed.
+    ///
+    /// `installed` may be older than `previous` when a version was named
+    /// explicitly, which is what a rollback is.
     Installed {
         /// The version replaced.
         previous: Version,
         /// The version now in use.
         installed: Version,
     },
-    /// The published release is older than what is running.
+    /// The running version is newer than anything published in the channel.
     ///
-    /// Normal for a development build, and never acted upon: replacing a newer
-    /// binary with an older one is not an update.
+    /// Normal for a development build, and never acted upon.
     Ahead {
         /// The version in use.
         current: Version,
         /// The newest published version.
         latest: Version,
     },
+    /// The channel has no releases at all.
+    NoneAvailable {
+        /// The version in use.
+        current: Version,
+        /// The channel that was searched.
+        channel: Channel,
+    },
 }
 
-/// Compares the running version against the newest release and, unless
-/// `check_only`, installs it when it is newer.
+/// The releases a channel offers, newest first, alongside the running version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listing {
+    /// Matching releases, newest first.
+    pub releases: Vec<Release>,
+    /// The version in use, so a renderer can mark it.
+    pub current: Version,
+}
+
+/// Reports whether a newer release exists, without installing anything.
 ///
 /// # Errors
 ///
-/// Returns an [`UpdateError`] when the latest release cannot be determined,
-/// this platform has no published binary, or installation fails.
+/// Returns [`UpdateError`] when releases cannot be listed.
+pub fn status(
+    source: &dyn ReleaseSource,
+    current: &Version,
+    channel: Channel,
+) -> Result<UpdateOutcome, UpdateError> {
+    let releases = source.list()?;
+    Ok(compare(current, newest(&releases, channel), channel))
+}
+
+/// Lists the releases a channel offers, newest first.
+///
+/// # Errors
+///
+/// Returns [`UpdateError`] when releases cannot be listed.
+pub fn list(
+    source: &dyn ReleaseSource,
+    current: &Version,
+    channel: Channel,
+) -> Result<Listing, UpdateError> {
+    let mut releases: Vec<Release> = source
+        .list()?
+        .into_iter()
+        .filter(|r| channel.accepts(&r.version))
+        .collect();
+
+    releases.sort_by(|a, b| b.version.cmp(&a.version));
+
+    Ok(Listing {
+        releases,
+        current: current.clone(),
+    })
+}
+
+/// Installs a release: the newest in `channel`, or `requested` when one is
+/// named.
+///
+/// Naming a version installs exactly that one, whether or not it is newer and
+/// whether or not the channel would have offered it. That is what makes a
+/// rollback expressible, and it is safe to allow because the caller had to
+/// write the version out.
+///
+/// # Errors
+///
+/// Returns [`UpdateError`] when releases cannot be listed, a requested version
+/// does not exist, this platform has no published binary, or installation
+/// fails.
 pub fn update(
     source: &dyn ReleaseSource,
     current: &Version,
     target: (&str, &str),
-    check_only: bool,
+    channel: Channel,
+    requested: Option<&Version>,
 ) -> Result<UpdateOutcome, UpdateError> {
-    let release = source.latest()?;
+    let releases = source.list()?;
 
-    if release.version == *current {
+    let chosen =
+        match requested {
+            Some(wanted) => Some(releases.iter().find(|r| r.version == *wanted).ok_or_else(
+                || UpdateError::NoSuchRelease {
+                    requested: wanted.clone(),
+                    available: summarize(&releases),
+                },
+            )?),
+            None => newest(&releases, channel),
+        };
+
+    let Some(release) = chosen else {
+        return Ok(UpdateOutcome::NoneAvailable {
+            current: current.clone(),
+            channel,
+        });
+    };
+
+    // Without an explicit request, only a genuine upgrade is acted upon.
+    if requested.is_none() {
+        match compare(current, Some(release), channel) {
+            UpdateOutcome::Available { .. } => {}
+            settled => return Ok(settled),
+        }
+    } else if release.version == *current {
         return Ok(UpdateOutcome::UpToDate {
             current: current.clone(),
-        });
-    }
-
-    if release.version < *current {
-        return Ok(UpdateOutcome::Ahead {
-            current: current.clone(),
-            latest: release.version,
-        });
-    }
-
-    if check_only {
-        return Ok(UpdateOutcome::Available {
-            current: current.clone(),
-            latest: release.version,
         });
     }
 
@@ -148,12 +314,56 @@ pub fn update(
         arch: arch.to_owned(),
     })?;
 
-    source.install(&release, &asset)?;
+    source.install(release, &asset)?;
 
     Ok(UpdateOutcome::Installed {
         previous: current.clone(),
-        installed: release.version,
+        installed: release.version.clone(),
     })
+}
+
+/// The newest release a channel accepts.
+fn newest(releases: &[Release], channel: Channel) -> Option<&Release> {
+    releases
+        .iter()
+        .filter(|r| channel.accepts(&r.version))
+        .max_by(|a, b| a.version.cmp(&b.version))
+}
+
+/// Judges the running version against the newest release on offer.
+fn compare(current: &Version, newest: Option<&Release>, channel: Channel) -> UpdateOutcome {
+    let Some(release) = newest else {
+        return UpdateOutcome::NoneAvailable {
+            current: current.clone(),
+            channel,
+        };
+    };
+
+    match release.version.cmp(current) {
+        std::cmp::Ordering::Equal => UpdateOutcome::UpToDate {
+            current: current.clone(),
+        },
+        std::cmp::Ordering::Less => UpdateOutcome::Ahead {
+            current: current.clone(),
+            latest: release.version.clone(),
+        },
+        std::cmp::Ordering::Greater => UpdateOutcome::Available {
+            current: current.clone(),
+            latest: release.version.clone(),
+        },
+    }
+}
+
+/// A short, newest-first list of published versions, for diagnostics.
+fn summarize(releases: &[Release]) -> String {
+    let mut versions: Vec<&Version> = releases.iter().map(|r| &r.version).collect();
+    versions.sort_by(|a, b| b.cmp(a));
+    versions
+        .iter()
+        .take(5)
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The release asset for a platform.
@@ -177,20 +387,12 @@ pub fn asset_name(os: &str, arch: &str) -> Option<String> {
 
 /// Interprets a published tag, which conventionally carries a leading `v`.
 ///
-/// # Errors
-///
-/// Returns [`UpdateError::UnreadableTag`] when the tag is not a version.
-pub fn parse_tag(tag: &str) -> Result<Release, UpdateError> {
-    let version = tag
-        .strip_prefix('v')
-        .unwrap_or(tag)
-        .parse()
-        .map_err(|e: semver::Error| UpdateError::UnreadableTag {
-            tag: tag.to_owned(),
-            detail: e.to_string(),
-        })?;
-
-    Ok(Release {
+/// Returns `None` for a tag that is not a version, so that an unrelated tag in
+/// the repository does not prevent the rest from being read.
+#[must_use]
+pub fn parse_tag(tag: &str) -> Option<Release> {
+    let version = tag.strip_prefix('v').unwrap_or(tag).parse().ok()?;
+    Some(Release {
         tag: tag.to_owned(),
         version,
     })
@@ -205,68 +407,181 @@ mod tests {
         text.parse().unwrap()
     }
 
-    /// A release source that answers with a fixed tag and records installs.
+    fn releases(tags: &[&str]) -> Vec<Release> {
+        tags.iter().filter_map(|t| parse_tag(t)).collect()
+    }
+
+    /// A release source over a fixed set of tags that records installs.
     struct Fake {
-        tag: String,
+        published: Vec<Release>,
         installed: RefCell<Vec<String>>,
     }
 
     impl Fake {
-        fn at(tag: &str) -> Self {
+        fn with(tags: &[&str]) -> Self {
             Self {
-                tag: tag.to_owned(),
+                published: releases(tags),
                 installed: RefCell::new(Vec::new()),
             }
+        }
+
+        fn installs(&self) -> Vec<String> {
+            self.installed.borrow().clone()
         }
     }
 
     impl ReleaseSource for Fake {
-        fn latest(&self) -> Result<Release, UpdateError> {
-            parse_tag(&self.tag)
+        fn list(&self) -> Result<Vec<Release>, UpdateError> {
+            Ok(self.published.clone())
         }
 
-        fn install(&self, _: &Release, asset: &str) -> Result<(), UpdateError> {
-            self.installed.borrow_mut().push(asset.to_owned());
+        fn install(&self, release: &Release, _: &str) -> Result<(), UpdateError> {
+            self.installed.borrow_mut().push(release.tag.clone());
             Ok(())
         }
     }
 
     const LINUX: (&str, &str) = ("linux", "x86_64");
 
+    // ─── Channel semantics ───────────────────────────────────────────────────
+
     #[test]
-    fn installs_a_newer_release() {
-        let source = Fake::at("v1.5.0");
-        let outcome = update(&source, &v("1.4.0"), LINUX, false).unwrap();
+    fn stable_accepts_only_finished_releases() {
+        let c = Channel::Stable;
+        assert!(c.accepts(&v("1.0.0")));
+        assert!(!c.accepts(&v("1.0.0-rc.1")));
+        assert!(!c.accepts(&v("1.0.0-alpha.0")));
+    }
+
+    #[test]
+    fn a_channel_is_a_floor_not_an_exact_match() {
+        // Asking for release candidates must not exclude finished releases:
+        // a stable release is strictly more mature than the rc before it.
+        let c = Channel::Rc;
+        assert!(c.accepts(&v("1.0.0")));
+        assert!(c.accepts(&v("1.0.0-rc.1")));
+        assert!(!c.accepts(&v("1.0.0-beta.9")));
+        assert!(!c.accepts(&v("1.0.0-alpha.9")));
+    }
+
+    #[test]
+    fn alpha_accepts_every_recognized_release() {
+        let c = Channel::Alpha;
+        for text in ["2.0.0", "1.0.0-rc.1", "1.0.0-beta.0", "1.0.0-alpha.0"] {
+            assert!(c.accepts(&v(text)), "{text}");
+        }
+    }
+
+    #[test]
+    fn an_unrecognized_pre_release_is_never_offered() {
+        // Without a rank there is no way to judge it against a floor.
+        for channel in [Channel::Stable, Channel::Rc, Channel::Beta, Channel::Alpha] {
+            assert!(
+                !channel.accepts(&v("1.0.0-nightly.4")),
+                "{channel} must not accept an unrankable pre-release"
+            );
+        }
+    }
+
+    #[test]
+    fn a_channel_floor_outranks_semver_ordering() {
+        // The case the floor exists for: semver compares the version core
+        // first, so 1.1.0-alpha.0 outranks 1.0.0-rc.5 numerically. Someone
+        // tracking release candidates must not be moved onto it.
+        assert!(v("1.1.0-alpha.0") > v("1.0.0-rc.5"));
+
+        let published = releases(&["v1.0.0-rc.5", "v1.1.0-alpha.0"]);
+
+        let for_rc = newest(&published, Channel::Rc).unwrap();
+        assert_eq!(for_rc.version, v("1.0.0-rc.5"));
+
+        let for_alpha = newest(&published, Channel::Alpha).unwrap();
+        assert_eq!(for_alpha.version, v("1.1.0-alpha.0"));
+    }
+
+    #[test]
+    fn channels_round_trip_through_text() {
+        for channel in [Channel::Stable, Channel::Rc, Channel::Beta, Channel::Alpha] {
+            assert_eq!(channel.to_string().parse::<Channel>().unwrap(), channel);
+        }
+        assert!("nightly".parse::<Channel>().is_err());
+    }
+
+    // ─── status ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn status_reports_a_newer_release_without_installing() {
+        let source = Fake::with(&["v1.0.0", "v1.1.0"]);
+        let outcome = status(&source, &v("1.0.0"), Channel::Stable).unwrap();
+
+        assert_eq!(
+            outcome,
+            UpdateOutcome::Available {
+                current: v("1.0.0"),
+                latest: v("1.1.0"),
+            }
+        );
+        assert!(source.installs().is_empty());
+    }
+
+    #[test]
+    fn status_ignores_releases_below_the_channel_floor() {
+        let source = Fake::with(&["v1.0.0", "v2.0.0-alpha.0"]);
+
+        // On stable, the alpha is invisible.
+        assert_eq!(
+            status(&source, &v("1.0.0"), Channel::Stable).unwrap(),
+            UpdateOutcome::UpToDate {
+                current: v("1.0.0")
+            }
+        );
+
+        // Opting in surfaces it.
+        assert_eq!(
+            status(&source, &v("1.0.0"), Channel::Alpha).unwrap(),
+            UpdateOutcome::Available {
+                current: v("1.0.0"),
+                latest: v("2.0.0-alpha.0"),
+            }
+        );
+    }
+
+    #[test]
+    fn a_channel_with_no_releases_says_so() {
+        // Every published release is a pre-release, so stable offers nothing.
+        let source = Fake::with(&["v0.1.0-alpha.9", "v0.2.0-alpha.2"]);
+        let outcome = status(&source, &v("0.2.0-alpha.2"), Channel::Stable).unwrap();
+
+        assert_eq!(
+            outcome,
+            UpdateOutcome::NoneAvailable {
+                current: v("0.2.0-alpha.2"),
+                channel: Channel::Stable,
+            }
+        );
+    }
+
+    // ─── update ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn installs_the_newest_release_in_the_channel() {
+        let source = Fake::with(&["v1.0.0", "v1.1.0", "v2.0.0-beta.0"]);
+        let outcome = update(&source, &v("1.0.0"), LINUX, Channel::Stable, None).unwrap();
 
         assert_eq!(
             outcome,
             UpdateOutcome::Installed {
-                previous: v("1.4.0"),
-                installed: v("1.5.0"),
+                previous: v("1.0.0"),
+                installed: v("1.1.0"),
             }
         );
-        assert_eq!(*source.installed.borrow(), ["vump-linux-amd64"]);
+        assert_eq!(source.installs(), ["v1.1.0"]);
     }
 
     #[test]
-    fn does_nothing_when_already_current() {
-        let source = Fake::at("v1.4.0");
-        let outcome = update(&source, &v("1.4.0"), LINUX, false).unwrap();
-
-        assert_eq!(
-            outcome,
-            UpdateOutcome::UpToDate {
-                current: v("1.4.0")
-            }
-        );
-        assert!(source.installed.borrow().is_empty());
-    }
-
-    #[test]
-    fn never_installs_an_older_release() {
-        // A development build ahead of the last release must not be downgraded.
-        let source = Fake::at("v1.0.0");
-        let outcome = update(&source, &v("1.4.0"), LINUX, false).unwrap();
+    fn never_downgrades_without_being_asked() {
+        let source = Fake::with(&["v1.0.0"]);
+        let outcome = update(&source, &v("1.4.0"), LINUX, Channel::Stable, None).unwrap();
 
         assert_eq!(
             outcome,
@@ -275,48 +590,143 @@ mod tests {
                 latest: v("1.0.0"),
             }
         );
-        assert!(
-            source.installed.borrow().is_empty(),
-            "an older release must never overwrite a newer binary"
-        );
+        assert!(source.installs().is_empty());
     }
 
     #[test]
-    fn checking_reports_without_installing() {
-        let source = Fake::at("v2.0.0");
-        let outcome = update(&source, &v("1.0.0"), LINUX, true).unwrap();
+    fn an_explicit_version_installs_even_when_older() {
+        // This is what a rollback is. The caller wrote the version out, so the
+        // downgrade guard would only be in the way.
+        let source = Fake::with(&["v1.0.0", "v1.1.0", "v1.2.0"]);
+        let outcome = update(
+            &source,
+            &v("1.2.0"),
+            LINUX,
+            Channel::Stable,
+            Some(&v("1.0.0")),
+        )
+        .unwrap();
 
         assert_eq!(
             outcome,
-            UpdateOutcome::Available {
-                current: v("1.0.0"),
-                latest: v("2.0.0"),
+            UpdateOutcome::Installed {
+                previous: v("1.2.0"),
+                installed: v("1.0.0"),
             }
         );
-        assert!(source.installed.borrow().is_empty());
+        assert_eq!(source.installs(), ["v1.0.0"]);
     }
 
     #[test]
-    fn a_pre_release_is_older_than_its_release() {
-        let source = Fake::at("v1.0.0");
-        let outcome = update(&source, &v("1.0.0-rc.1"), LINUX, true).unwrap();
+    fn an_explicit_version_ignores_the_channel() {
+        // Naming a pre-release is consent enough; the floor is for automatic
+        // selection, not for overriding what was asked for.
+        let source = Fake::with(&["v1.0.0", "v2.0.0-alpha.0"]);
+        let outcome = update(
+            &source,
+            &v("1.0.0"),
+            LINUX,
+            Channel::Stable,
+            Some(&v("2.0.0-alpha.0")),
+        )
+        .unwrap();
+
+        assert!(matches!(outcome, UpdateOutcome::Installed { .. }));
+        assert_eq!(source.installs(), ["v2.0.0-alpha.0"]);
+    }
+
+    #[test]
+    fn requesting_the_running_version_does_nothing() {
+        let source = Fake::with(&["v1.0.0"]);
+        let outcome = update(
+            &source,
+            &v("1.0.0"),
+            LINUX,
+            Channel::Stable,
+            Some(&v("1.0.0")),
+        )
+        .unwrap();
 
         assert_eq!(
             outcome,
-            UpdateOutcome::Available {
-                current: v("1.0.0-rc.1"),
-                latest: v("1.0.0"),
+            UpdateOutcome::UpToDate {
+                current: v("1.0.0")
             }
         );
+        assert!(source.installs().is_empty());
+    }
+
+    #[test]
+    fn an_unpublished_version_is_refused_with_what_does_exist() {
+        let source = Fake::with(&["v1.0.0", "v1.1.0"]);
+        let err = update(
+            &source,
+            &v("1.0.0"),
+            LINUX,
+            Channel::Stable,
+            Some(&v("9.9.9")),
+        )
+        .unwrap_err();
+
+        let UpdateError::NoSuchRelease { available, .. } = err else {
+            panic!("expected NoSuchRelease, got {err:?}");
+        };
+        assert!(available.contains("1.1.0"), "{available}");
+        assert!(source.installs().is_empty());
     }
 
     #[test]
     fn an_unsupported_platform_is_reported_before_downloading() {
-        let source = Fake::at("v2.0.0");
-        let err = update(&source, &v("1.0.0"), ("freebsd", "x86_64"), false).unwrap_err();
+        let source = Fake::with(&["v2.0.0"]);
+        let err = update(
+            &source,
+            &v("1.0.0"),
+            ("freebsd", "x86_64"),
+            Channel::Stable,
+            None,
+        )
+        .unwrap_err();
 
         assert!(matches!(err, UpdateError::UnsupportedPlatform { .. }));
-        assert!(source.installed.borrow().is_empty());
+        assert!(source.installs().is_empty());
+    }
+
+    // ─── list ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn lists_matching_releases_newest_first() {
+        let source = Fake::with(&["v1.0.0", "v1.2.0", "v1.1.0"]);
+        let listing = list(&source, &v("1.1.0"), Channel::Stable).unwrap();
+
+        let versions: Vec<String> = listing
+            .releases
+            .iter()
+            .map(|r| r.version.to_string())
+            .collect();
+        assert_eq!(versions, ["1.2.0", "1.1.0", "1.0.0"]);
+        assert_eq!(listing.current, v("1.1.0"));
+    }
+
+    #[test]
+    fn listing_respects_the_channel_floor() {
+        let source = Fake::with(&["v1.0.0", "v1.1.0-rc.0", "v1.2.0-alpha.0"]);
+
+        let stable = list(&source, &v("1.0.0"), Channel::Stable).unwrap();
+        assert_eq!(stable.releases.len(), 1);
+
+        let rc = list(&source, &v("1.0.0"), Channel::Rc).unwrap();
+        assert_eq!(rc.releases.len(), 2);
+
+        let alpha = list(&source, &v("1.0.0"), Channel::Alpha).unwrap();
+        assert_eq!(alpha.releases.len(), 3);
+    }
+
+    #[test]
+    fn a_tag_that_is_not_a_version_is_skipped_rather_than_fatal() {
+        // An unrelated tag in the repository must not hide every release.
+        let source = Fake::with(&["v1.0.0", "nightly", "v1.1.0"]);
+        let listing = list(&source, &v("1.0.0"), Channel::Stable).unwrap();
+        assert_eq!(listing.releases.len(), 2);
     }
 
     #[test]
@@ -350,6 +760,6 @@ mod tests {
         assert_eq!(parse_tag("1.2.3").unwrap().version, v("1.2.3"));
         // The tag is preserved as published, since it forms the download URL.
         assert_eq!(parse_tag("v1.2.3").unwrap().tag, "v1.2.3");
-        assert!(parse_tag("nightly").is_err());
+        assert!(parse_tag("nightly").is_none());
     }
 }

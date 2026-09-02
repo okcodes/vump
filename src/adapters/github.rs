@@ -11,6 +11,10 @@ const REPOSITORY: &str = "okcodes/vump";
 /// hanging a command the user is waiting on.
 const TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Releases fetched in one request. Comfortably more than this project will
+/// publish between prunings, and one page keeps the command a single call.
+const PAGE_SIZE: u32 = 100;
+
 /// Reads releases from the GitHub API and replaces the running binary.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GitHubReleases;
@@ -32,10 +36,13 @@ impl GitHubReleases {
 }
 
 impl ReleaseSource for GitHubReleases {
-    fn latest(&self) -> Result<Release, UpdateError> {
-        // This endpoint excludes pre-releases, so an alpha never presents
-        // itself as an upgrade to someone running a stable build.
-        let url = format!("https://api.github.com/repos/{REPOSITORY}/releases/latest");
+    fn list(&self) -> Result<Vec<Release>, UpdateError> {
+        // The whole list is read rather than the "latest" endpoint, because
+        // that endpoint answers only one channel's question. Maturity is
+        // derived from each version itself, which also keeps the answer
+        // consistent with releases whose pre-release flag was set by hand.
+        let url =
+            format!("https://api.github.com/repos/{REPOSITORY}/releases?per_page={PAGE_SIZE}");
 
         let mut response = Self::agent()
             .get(&url)
@@ -53,14 +60,24 @@ impl ReleaseSource for GitHubReleases {
                     detail: e.to_string(),
                 })?;
 
-        let tag = body
-            .get("tag_name")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| UpdateError::Unreachable {
-                detail: "response carried no tag_name".to_owned(),
-            })?;
+        let entries = body.as_array().ok_or_else(|| UpdateError::Unreachable {
+            detail: "response was not a list of releases".to_owned(),
+        })?;
 
-        parse_tag(tag)
+        // Drafts are not installable, and a tag that is not a version is
+        // skipped rather than treated as fatal: one unrelated tag in the
+        // repository must not hide every release.
+        Ok(entries
+            .iter()
+            .filter(|entry| {
+                !entry
+                    .get("draft")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+            })
+            .filter_map(|entry| entry.get("tag_name").and_then(serde_json::Value::as_str))
+            .filter_map(parse_tag)
+            .collect())
     }
 
     fn install(&self, release: &Release, asset: &str) -> Result<(), UpdateError> {
