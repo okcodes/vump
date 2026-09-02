@@ -5,7 +5,9 @@
 //! inputs to its result, which is what makes the rules exhaustively testable.
 
 pub mod bump;
+pub mod tag;
 pub mod version_file;
 
 pub use bump::{PreLabel, StableBump, Transition, TransitionError, apply};
+pub use tag::{TagPattern, TagPatternError};
 pub use version_file::{Format, VersionFileError};

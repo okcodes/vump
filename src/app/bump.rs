@@ -15,6 +15,7 @@ use thiserror::Error;
 
 use crate::app::{AppError, read_project_versions, resolve};
 use crate::config::{GitSettings, Project};
+use crate::domain::TagPattern;
 use crate::domain::version_file::Format;
 use crate::domain::{Transition, TransitionError, apply as transition_apply};
 
@@ -94,6 +95,20 @@ pub struct GitIntent {
     pub tag: bool,
     /// Push.
     pub push: bool,
+}
+
+/// How a release is named, and which side-effects to perform.
+///
+/// Naming travels with the intent because the tag template is resolved per
+/// project: two independently-versioned projects must not produce the same tag.
+#[derive(Debug, Clone, Copy)]
+pub struct GitPlanning<'a> {
+    /// Side-effects to perform.
+    pub intent: GitIntent,
+    /// Commit message template.
+    pub commit_message: &'a str,
+    /// Tag template for the project being bumped.
+    pub tag: &'a TagPattern,
 }
 
 /// Git side-effects requested on the command line.
@@ -187,10 +202,9 @@ pub fn plan(
     root: &Path,
     project: &Project,
     transition: Transition,
-    settings: &GitSettings,
-    intent: GitIntent,
+    planning: GitPlanning<'_>,
 ) -> Result<BumpPlan, BumpError> {
-    plan_from(fs, root, project, None, transition, settings, intent)
+    plan_from(fs, root, project, None, transition, planning)
 }
 
 /// Decides what a bump would change, treating `base` as the current version.
@@ -210,8 +224,7 @@ pub fn plan_from(
     project: &Project,
     base: Option<Version>,
     transition: Transition,
-    settings: &GitSettings,
-    intent: GitIntent,
+    planning: GitPlanning<'_>,
 ) -> Result<BumpPlan, BumpError> {
     let files = read_project_versions(fs, root, project)?;
 
@@ -254,9 +267,12 @@ pub fn plan_from(
         .collect();
 
     let git = GitPlan {
-        commit: intent.commit.then(|| settings.commit_message_for(&next)),
-        tag: intent.tag.then(|| settings.tag_name_for(&next)),
-        push: intent.push,
+        commit: planning
+            .intent
+            .commit
+            .then(|| GitSettings::render(planning.commit_message, project.name.as_deref(), &next)),
+        tag: planning.intent.tag.then(|| planning.tag.render(&next)),
+        push: planning.intent.push,
     };
 
     Ok(BumpPlan {
@@ -356,11 +372,30 @@ mod tests {
         Project {
             name: None,
             files: files.iter().map(|s| (*s).to_owned()).collect(),
+            tag_pattern: None,
         }
     }
 
     fn settings() -> GitSettings {
         GitSettings::default()
+    }
+
+    /// The repository-wide tag pattern, which is what a single-project
+    /// repository uses.
+    fn default_pattern() -> TagPattern {
+        TagPattern::parse(crate::config::DEFAULT_TAG_PATTERN).expect("default pattern is valid")
+    }
+
+    fn planning<'a>(
+        intent: GitIntent,
+        settings: &'a GitSettings,
+        tag: &'a TagPattern,
+    ) -> GitPlanning<'a> {
+        GitPlanning {
+            intent,
+            commit_message: &settings.commit_message,
+            tag,
+        }
     }
 
     fn v(text: &str) -> Version {
@@ -382,8 +417,7 @@ mod tests {
             root(),
             &project(&["VERSION", "ui/package.json"]),
             Transition::Stable(StableBump::Patch),
-            &settings(),
-            GitIntent::default(),
+            planning(GitIntent::default(), &settings(), &default_pattern()),
         )
         .unwrap();
 
@@ -402,8 +436,7 @@ mod tests {
             root(),
             &project(&["VERSION"]),
             Transition::Stable(StableBump::Major),
-            &settings(),
-            GitIntent::default(),
+            planning(GitIntent::default(), &settings(), &default_pattern()),
         )
         .unwrap();
 
@@ -421,8 +454,7 @@ mod tests {
             root(),
             &project(&["VERSION", "Cargo.toml"]),
             Transition::Stable(StableBump::Patch),
-            &settings(),
-            GitIntent::default(),
+            planning(GitIntent::default(), &settings(), &default_pattern()),
         )
         .unwrap_err();
 
@@ -446,8 +478,7 @@ mod tests {
             root(),
             &project(&["VERSION", "Cargo.toml"]),
             Transition::Stable(StableBump::Minor),
-            &settings(),
-            GitIntent::default(),
+            planning(GitIntent::default(), &settings(), &default_pattern()),
         )
         .unwrap();
 
@@ -470,12 +501,15 @@ mod tests {
             root(),
             &project(&["VERSION"]),
             Transition::Stable(StableBump::Patch),
-            &settings(),
-            GitIntent {
-                commit: true,
-                tag: true,
-                push: false,
-            },
+            planning(
+                GitIntent {
+                    commit: true,
+                    tag: true,
+                    push: false,
+                },
+                &settings(),
+                &default_pattern(),
+            ),
         )
         .unwrap();
 
@@ -504,11 +538,14 @@ mod tests {
             root(),
             &project(&["VERSION"]),
             Transition::Stable(StableBump::Patch),
-            &settings(),
-            GitIntent {
-                commit: true,
-                ..GitIntent::default()
-            },
+            planning(
+                GitIntent {
+                    commit: true,
+                    ..GitIntent::default()
+                },
+                &settings(),
+                &default_pattern(),
+            ),
         )
         .unwrap();
         apply(&fs, &vcs, root(), &plan).unwrap();
@@ -526,11 +563,14 @@ mod tests {
             root(),
             &project(&["VERSION"]),
             Transition::Stable(StableBump::Patch),
-            &settings(),
-            GitIntent {
-                commit: true,
-                ..GitIntent::default()
-            },
+            planning(
+                GitIntent {
+                    commit: true,
+                    ..GitIntent::default()
+                },
+                &settings(),
+                &default_pattern(),
+            ),
         )
         .unwrap();
 
@@ -550,8 +590,7 @@ mod tests {
             root(),
             &project(&["VERSION"]),
             Transition::Stable(StableBump::Patch),
-            &settings(),
-            GitIntent::default(),
+            planning(GitIntent::default(), &settings(), &default_pattern()),
         )
         .unwrap();
 
@@ -568,12 +607,15 @@ mod tests {
             root(),
             &project(&["VERSION"]),
             Transition::Stable(StableBump::Patch),
-            &settings(),
-            GitIntent {
-                commit: true,
-                tag: true,
-                push: true,
-            },
+            planning(
+                GitIntent {
+                    commit: true,
+                    tag: true,
+                    push: true,
+                },
+                &settings(),
+                &default_pattern(),
+            ),
         )
         .unwrap();
 
@@ -594,8 +636,7 @@ mod tests {
             root(),
             &project(&["VERSION"]),
             Transition::Stable(StableBump::Patch),
-            &settings(),
-            GitIntent::default(),
+            planning(GitIntent::default(), &settings(), &default_pattern()),
         )
         .unwrap_err();
 

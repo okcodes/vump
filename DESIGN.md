@@ -142,6 +142,30 @@ without first knowing where `api` lives.
 `vump status` with no project selected reports every declared project and
 whether its files agree.
 
+### Tag patterns
+
+`tag_pattern` may be set per project, overriding the repository-wide one, and
+both it and `commit_message` accept a `{project}` placeholder so that one
+repository-wide template can cover every project.
+
+This is not cosmetic. Independently-versioned projects sharing one pattern
+collide as soon as two of them reach the same version, and a pushed tag carries
+no indication of which project it describes — which makes tag verification, the
+thing vump exists for, impossible in exactly the repositories `[[project]]` was
+added to serve.
+
+A pattern is read in both directions: it names the tag a bump creates, and it
+recognizes which project a pushed tag belongs to and what version it claims.
+That is what lets CI pass a tag through without stating the project.
+
+Matching is literal — a fixed prefix, the version, a fixed suffix — rather than
+a regular expression, so a pattern cannot match more than it appears to.
+
+When several projects claim one tag, that is reported rather than guessed at: a
+tag attributed to the wrong project would verify the wrong source. An argument
+matching no pattern is read as a bare version, which keeps `vump check 1.2.3`
+working in a single-project repository.
+
 ### Git integration
 
 ```toml

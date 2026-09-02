@@ -54,6 +54,21 @@ impl Fixture {
         Run::from(output)
     }
 
+    /// Tags present in the fixture repository, in git's own order.
+    fn tags(&self) -> Vec<String> {
+        let out = Command::new("git")
+            .args(["tag"])
+            .current_dir(self.dir.path())
+            .output()
+            .expect("cannot list tags");
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(ToOwned::to_owned)
+            .collect()
+    }
+
     fn git(&self, args: &[&str]) -> &Self {
         let status = Command::new("git")
             .args(args)
@@ -316,12 +331,7 @@ fn a_bump_commits_and_tags_when_asked() {
     let run = fx.run(&["patch", "--tag"]);
     assert_eq!(run.code, 0, "{}", run.output());
 
-    let tags = Command::new("git")
-        .args(["tag"])
-        .current_dir(fx.path())
-        .output()
-        .expect("cannot list tags");
-    assert_eq!(String::from_utf8_lossy(&tags.stdout).trim(), "v1.2.4");
+    assert_eq!(fx.tags(), ["v1.2.4"]);
 }
 
 #[test]
@@ -335,12 +345,7 @@ fn configuration_alone_drives_git_actions() {
 
     assert_eq!(fx.run(&["patch"]).code, 0);
 
-    let tags = Command::new("git")
-        .args(["tag"])
-        .current_dir(fx.path())
-        .output()
-        .expect("cannot list tags");
-    assert_eq!(String::from_utf8_lossy(&tags.stdout).trim(), "v1.2.4");
+    assert_eq!(fx.tags(), ["v1.2.4"]);
 }
 
 #[test]
@@ -353,12 +358,7 @@ fn no_git_overrides_configured_actions() {
     assert_eq!(fx.run(&["patch", "--no-git"]).code, 0);
     assert_eq!(fx.read("VERSION"), "1.2.4\n");
 
-    let tags = Command::new("git")
-        .args(["tag"])
-        .current_dir(fx.path())
-        .output()
-        .expect("cannot list tags");
-    assert!(String::from_utf8_lossy(&tags.stdout).trim().is_empty());
+    assert!(fx.tags().is_empty());
 }
 
 #[test]
@@ -478,6 +478,102 @@ fn projects_are_versioned_independently() {
         fx.read("web/package.json").contains("3.4.5"),
         "the other project must be untouched"
     );
+}
+
+/// A monorepo where each project carries its own tag pattern.
+const MULTI_TAGGED: &str = "\
+[[project]]
+name = \"api\"
+files = [\"api/Cargo.toml\"]
+tag_pattern = \"api-v{new_version}\"
+
+[[project]]
+name = \"web\"
+files = [\"web/package.json\"]
+tag_pattern = \"web-v{new_version}\"
+";
+
+fn tagged_monorepo() -> Fixture {
+    Fixture::new()
+        .write("vump.toml", MULTI_TAGGED)
+        .write("api/Cargo.toml", "[package]\nversion = \"1.0.0\"\n")
+        .write("web/package.json", "{\"version\":\"3.4.5\"}")
+}
+
+#[test]
+fn a_tag_identifies_its_own_project() {
+    // This is the CI case: a workflow passes the pushed tag straight through,
+    // without knowing or saying which project it belongs to.
+    let fx = tagged_monorepo();
+
+    assert_eq!(fx.run(&["check", "api-v1.0.0"]).code, 0);
+    assert_eq!(fx.run(&["check", "web-v3.4.5"]).code, 0);
+
+    // The version is compared against the right project, not just any.
+    assert_eq!(fx.run(&["check", "api-v3.4.5"]).code, 4);
+    assert_eq!(fx.run(&["check", "web-v1.0.0"]).code, 4);
+}
+
+#[test]
+fn a_bump_tags_with_the_projects_own_pattern() {
+    let fx = tagged_monorepo().with_git();
+
+    let run = fx.run(&["patch", "--project", "api", "--tag"]);
+    assert_eq!(run.code, 0, "{}", run.output());
+
+    assert_eq!(fx.tags(), ["api-v1.0.1"]);
+}
+
+#[test]
+fn independently_versioned_projects_do_not_collide_on_tags() {
+    // Both projects reaching the same version is exactly the case a single
+    // repository-wide pattern could not express.
+    let fx = Fixture::new()
+        .write("vump.toml", MULTI_TAGGED)
+        .write("api/Cargo.toml", "[package]\nversion = \"2.0.0\"\n")
+        .write("web/package.json", "{\"version\":\"2.0.0\"}")
+        .with_git();
+
+    assert_eq!(fx.run(&["patch", "--project", "api", "--tag"]).code, 0);
+    assert_eq!(fx.run(&["patch", "--project", "web", "--tag"]).code, 0);
+
+    let mut listed = fx.tags();
+    listed.sort();
+    assert_eq!(listed, ["api-v2.0.1", "web-v2.0.1"]);
+}
+
+#[test]
+fn a_tag_conflicting_with_an_explicit_project_is_refused() {
+    let fx = tagged_monorepo();
+    let run = fx.run(&["check", "api-v1.0.0", "--project", "web"]);
+    assert_eq!(run.code, 2, "{}", run.output());
+    assert!(run.stderr.contains("api"), "{}", run.stderr);
+}
+
+#[test]
+fn projects_sharing_a_tag_pattern_report_the_ambiguity() {
+    // Without distinct patterns there is no way to attribute a tag, and
+    // guessing would defeat the point of checking it.
+    let fx = Fixture::new()
+        .write("vump.toml", MULTI)
+        .write("api/Cargo.toml", "[package]\nversion = \"1.0.0\"\n")
+        .write("web/package.json", "{\"version\":\"3.4.5\"}");
+
+    let run = fx.run(&["check", "v1.0.0"]);
+    assert_eq!(run.code, 3, "{}", run.output());
+    assert!(run.stderr.contains("tag_pattern"), "{}", run.stderr);
+}
+
+#[test]
+fn a_single_project_repository_keeps_accepting_bare_versions() {
+    // The tag pattern now matches "v1.2.3", but "1.2.3" must keep working.
+    let fx = Fixture::new()
+        .write("vump.toml", SINGLE)
+        .write("VERSION", "1.2.3\n");
+
+    assert_eq!(fx.run(&["check", "1.2.3"]).code, 0);
+    assert_eq!(fx.run(&["check", "v1.2.3"]).code, 0);
+    assert_eq!(fx.run(&["check", "v9.9.9"]).code, 4);
 }
 
 #[test]
