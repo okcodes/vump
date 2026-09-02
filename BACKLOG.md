@@ -78,19 +78,31 @@ so. But editing the lock's *own* entry is not resolving dependencies — it is t
 same in-place version edit vump already performs on manifests. Whether that
 distinction is real enough to act on is undecided.
 
-### Signing the checksum file
+### Attesting release provenance
 
 Digests are published unsigned. That closes corruption and tampering in
-transit, but not a compromise of the release pipeline itself, which could
-publish matching binaries and digests together. Signing `SHA256SUMS` would
-close that, and needs a key and somewhere to publish it.
+transit, but not a compromise of the release pipeline itself: whoever can
+publish assets can publish a matching `SHA256SUMS` alongside a malicious
+binary, and verification would pass.
 
-### A distinct exit code for a refused install
+Closing that means proving *who* produced an artifact, not just that it arrived
+intact. The modern answer needs no long-lived key: GitHub's
+`actions/attest-build-provenance` uses Sigstore, signing with a short-lived
+certificate derived from the workflow's own OIDC identity and recording it in a
+public transparency log. There is nothing to store, rotate, or leak.
 
-`self update` refusing an unverifiable release exits 1, alongside every other
-self-update failure. A caller wanting to distinguish "could not verify" from
-"network failed" cannot. Whether that is worth another entry in the exit-code
-table is undecided.
+Verification cost differs by consumer, which is what makes this undecided
+rather than obvious:
+
+- The CI action could verify with `gh attestation verify`, which is close to
+  free.
+- `vump self update` would need a Sigstore implementation in Rust, or would
+  have to shell out to `gh` — a dependency the tool otherwise does not have.
+
+A long-lived signing key stored as a repository secret is *not* the answer:
+anyone who can compromise the pipeline enough to publish assets can generally
+also read its secrets, so it would add key-management burden without closing
+the hole it targets.
 
 ### Remembering an update channel
 

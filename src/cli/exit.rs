@@ -28,6 +28,20 @@ pub enum Exit {
     InvalidTransition = 7,
     /// A git operation failed.
     Git = 8,
+    /// A release artifact could not be trusted.
+    ///
+    /// Either the release publishes no checksums, or what was downloaded does
+    /// not match them. Distinct from a generic failure because it warrants
+    /// looking into rather than retrying: a mismatch means the artifact was
+    /// corrupted or tampered with.
+    Unverifiable = 9,
+    /// A release could not be obtained.
+    ///
+    /// The release list was unreachable, the requested version is not
+    /// published, or this platform has no published binary. Distinct from
+    /// verification failure because retrying, or naming a different version,
+    /// may well succeed.
+    ReleaseUnavailable = 10,
 }
 
 impl From<Exit> for std::process::ExitCode {
@@ -50,6 +64,8 @@ impl Exit {
             Self::DirtyTree => "dirty_tree",
             Self::InvalidTransition => "invalid_transition",
             Self::Git => "git",
+            Self::Unverifiable => "unverifiable",
+            Self::ReleaseUnavailable => "release_unavailable",
         }
     }
 }
@@ -70,5 +86,7 @@ mod tests {
         assert_eq!(Exit::DirtyTree as u8, 6);
         assert_eq!(Exit::InvalidTransition as u8, 7);
         assert_eq!(Exit::Git as u8, 8);
+        assert_eq!(Exit::Unverifiable as u8, 9);
+        assert_eq!(Exit::ReleaseUnavailable as u8, 10);
     }
 }

@@ -260,9 +260,16 @@ Exit codes are a stable contract:
 | 6 | Working tree dirty |
 | 7 | Invalid version transition |
 | 8 | Git operation failed |
+| 9 | A release artifact could not be trusted |
+| 10 | A release could not be obtained |
 
 A push that fails after a successful commit and tag exits 8 and prints the
 command to finish by hand — partial success is never reported as total failure.
+
+9 and 10 separate the two ways `self update` can fail to install: 9 means the
+artifact could not be trusted and warrants looking into, while 10 means it
+could not be fetched and may well succeed on a retry or with a different
+version.
 
 ## Safety
 
