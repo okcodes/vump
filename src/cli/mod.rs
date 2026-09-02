@@ -13,7 +13,7 @@ use clap::{Parser, Subcommand};
 use thiserror::Error;
 
 use crate::adapters::{GitCli, GitHubReleases, RealFileSystem, TerminalInteraction};
-use crate::app::bump::{BumpError, GitFlags, GitIntent};
+use crate::app::change::{ChangeError, GitFlags, GitIntent, GitPlanning};
 use crate::app::update::Channel;
 use crate::app::{self, AppError};
 use crate::config::{Config, ConfigError};
@@ -495,7 +495,7 @@ fn interactive(ctx: &Context) -> Result<Exit, CliError> {
         &project,
         Some(base),
         *transition,
-        app::bump::GitPlanning {
+        GitPlanning {
             intent,
             commit_message: &ctx.config.git.commit_message,
             tag: &tag_pattern,
@@ -508,9 +508,9 @@ fn interactive(ctx: &Context) -> Result<Exit, CliError> {
     }
 
     let vcs = GitCli::new(&ctx.root);
-    let outcome = app::bump::apply(&ctx.fs, &vcs, &ctx.root, &plan)?;
+    let outcome = app::change::apply(&ctx.fs, &vcs, &ctx.root, &plan.changes)?;
     let stale = app::lockfile::detect(&ctx.fs, &ctx.root, &outcome.written);
-    render::bump(&plan, &outcome, &stale, ctx.json);
+    render::applied(&plan.changes, &outcome, &stale, ctx.json);
 
     Ok(if outcome.push_error.is_some() {
         Exit::Git
@@ -533,7 +533,9 @@ fn resolve_base(
 
     match distinct.as_slice() {
         [only] => Ok(only.clone()),
-        [] => Err(CliError::Bump(BumpError::OutOfSync { found: Vec::new() })),
+        [] => Err(CliError::Change(ChangeError::OutOfSync {
+            found: Vec::new(),
+        })),
         _ => {
             // Each candidate is shown with the files recording it, so the
             // choice is made on evidence rather than on a bare version string.
@@ -620,7 +622,7 @@ fn bump(
         &ctx.root,
         project,
         transition,
-        app::bump::GitPlanning {
+        GitPlanning {
             intent,
             commit_message: &ctx.config.git.commit_message,
             tag: &tag_pattern,
@@ -628,14 +630,14 @@ fn bump(
     )?;
 
     if dry_run {
-        render::plan(&plan, ctx.json);
+        render::plan(&plan.changes, ctx.json);
         return Ok(Exit::Success);
     }
 
     let vcs = GitCli::new(&ctx.root);
-    let outcome = app::bump::apply(&ctx.fs, &vcs, &ctx.root, &plan)?;
+    let outcome = app::change::apply(&ctx.fs, &vcs, &ctx.root, &plan.changes)?;
     let stale = app::lockfile::detect(&ctx.fs, &ctx.root, &outcome.written);
-    render::bump(&plan, &outcome, &stale, ctx.json);
+    render::applied(&plan.changes, &outcome, &stale, ctx.json);
 
     // A failed push leaves real, recoverable work behind, so it is reported as
     // a git failure rather than as a successful run.
@@ -663,12 +665,12 @@ fn set(ctx: &Context, version: &str, dry_run: bool, git_args: &GitArgs) -> Resul
     let intent = git_args.intent(&ctx.config.git);
     let tag_pattern = ctx.config.tag_pattern_for(project)?;
 
-    let plan = app::bump::set(
+    let changes = app::set::set(
         &ctx.fs,
         &ctx.root,
         project,
         target,
-        app::bump::GitPlanning {
+        GitPlanning {
             intent,
             commit_message: &ctx.config.git.commit_message,
             tag: &tag_pattern,
@@ -676,22 +678,22 @@ fn set(ctx: &Context, version: &str, dry_run: bool, git_args: &GitArgs) -> Resul
     )?;
 
     if dry_run {
-        render::plan(&plan, ctx.json);
+        render::plan(&changes, ctx.json);
         return Ok(Exit::Success);
     }
 
     // Writing the version the files already record changes nothing, and git
     // refuses an empty commit, so the run stops here rather than failing at the
     // commit for a reason that has nothing to do with what was asked.
-    if !plan.changes_anything() {
-        render::unchanged(&plan, ctx.json);
+    if !changes.changes_anything() {
+        render::unchanged(&changes, ctx.json);
         return Ok(Exit::Success);
     }
 
     let vcs = GitCli::new(&ctx.root);
-    let outcome = app::bump::apply(&ctx.fs, &vcs, &ctx.root, &plan)?;
+    let outcome = app::change::apply(&ctx.fs, &vcs, &ctx.root, &changes)?;
     let stale = app::lockfile::detect(&ctx.fs, &ctx.root, &outcome.written);
-    render::bump(&plan, &outcome, &stale, ctx.json);
+    render::applied(&changes, &outcome, &stale, ctx.json);
 
     Ok(if outcome.push_error.is_some() {
         Exit::Git
@@ -800,7 +802,7 @@ enum CliError {
     App(#[from] AppError),
 
     #[error("{0}")]
-    Bump(#[from] BumpError),
+    Change(#[from] ChangeError),
 
     #[error("{0}")]
     Transition(#[from] TransitionError),
@@ -870,12 +872,12 @@ impl CliError {
                 // was invoked the wrong way for its environment.
                 InteractionError::Unavailable { .. } => Exit::Usage,
             },
-            Self::Bump(bump) => match bump {
-                BumpError::App(app) => app_exit(app),
-                BumpError::Transition(_) => Exit::InvalidTransition,
-                BumpError::OutOfSync { .. } => Exit::OutOfSync,
-                BumpError::DirtyTree { .. } => Exit::DirtyTree,
-                BumpError::Vcs(_) => Exit::Git,
+            Self::Change(change) => match change {
+                ChangeError::App(app) => app_exit(app),
+                ChangeError::Transition(_) => Exit::InvalidTransition,
+                ChangeError::OutOfSync { .. } => Exit::OutOfSync,
+                ChangeError::DirtyTree { .. } => Exit::DirtyTree,
+                ChangeError::Vcs(_) => Exit::Git,
             },
         }
     }

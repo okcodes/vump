@@ -5,9 +5,11 @@
 //! driven entirely from memory in tests.
 
 pub mod bump;
+pub mod change;
 pub mod check;
 pub mod init;
 pub mod lockfile;
+pub mod set;
 pub mod status;
 pub mod update;
 
