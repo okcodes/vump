@@ -113,6 +113,7 @@ mod tests {
         Project {
             name: None,
             files: files.iter().map(|s| (*s).to_owned()).collect(),
+            tag_pattern: None,
         }
     }
 

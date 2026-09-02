@@ -16,45 +16,9 @@ starting point, not a specification — expect it to change while building.
 
 ## Ready to build
 
-Ranked. The first one closes a hole in something already shipped; the rest add
-capability.
+Ranked by value.
 
-### 1. Per-project tag patterns
-
-**Problem.** `tag_pattern` lives under `[git]` and applies to the whole
-repository. A monorepo with independently-versioned projects therefore tags
-every one of them `v1.2.3`. Two projects reaching the same version collide
-outright, and `vump check "$GITHUB_REF_NAME"` cannot tell which project a
-pushed tag refers to.
-
-**Why it matters.** Multi-project support shipped without its release story.
-Tag verification is the thing vump exists for, and it does not currently work
-for the repositories the `[[project]]` feature was added to serve.
-
-**Shape.**
-
-```toml
-[[project]]
-name = "api"
-files = ["services/api/Cargo.toml"]
-tag_pattern = "api-v{new_version}"   # falls back to [git].tag_pattern
-```
-
-`check` should infer the project by matching a tag against each project's
-pattern — treat the pattern as a template with `{new_version}` as the capture,
-and read the version out of the tag. Explicit `--project` stays available to
-disambiguate.
-
-**Open questions.**
-
-- What happens when two patterns match one tag? Erroring is probably right,
-  since the answer is genuinely ambiguous.
-- Is a `{project}` placeholder worth adding, so one repository-wide pattern
-  (`{project}-v{new_version}`) covers the common case without repetition?
-- Should `check` with no `--project` in a multi-project repository verify *all*
-  projects, or refuse? Today it refuses.
-
-### 2. Verify downloaded release artifacts
+### 1. Verify downloaded release artifacts
 
 **Problem.** `download-vump.sh` fetches a binary over HTTPS and executes it in
 CI, where the Apple signing certificate and keychain password are in scope.
@@ -78,7 +42,7 @@ before replacing anything. Failing the check must abort, not warn.
   release, or fall back with a warning? Refusing is safer; it breaks updating
   *to* older releases that predate the checksums.
 
-### 3. Set an exact version
+### 2. Set an exact version
 
 **Problem.** There is no way to say "make everything 1.4.0". Files that
 disagree are a dead end in non-interactive mode: vump reports the
@@ -97,7 +61,7 @@ beforehand, since disagreement is precisely what it repairs.
 - Should it refuse to move backwards without a flag? Probably not — an exact
   version was named, which is consent, matching `self update --to`.
 
-### 4. Annotated and signed tags
+### 3. Annotated and signed tags
 
 **Problem.** Tags are created with `git tag <name>`, which makes a lightweight
 tag: a bare pointer with no tagger, date, or message.
@@ -146,9 +110,16 @@ vump otherwise has no need for — which one setting does not obviously justify.
 
 ### Inputs on the check action
 
-The composite action takes `version`, `config` and `vump-version`. A
-multi-project repository will likely want a `project` input, and this depends
-on item 1 above.
+The composite action takes `version`, `config` and `vump-version`. Passing a
+tag now selects its own project, so a `project` input is only needed for a
+repository that verifies bare versions rather than tags.
+
+### Per-project commit messages
+
+`commit_message` accepts `{project}`, which distinguishes a monorepo's commits.
+Whether a project also needs to *override* the whole message, as it can with
+`tag_pattern`, has no motivating case yet: tags must be unique, commit messages
+need not be.
 
 ---
 

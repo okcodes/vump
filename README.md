@@ -110,6 +110,34 @@ vump status                 # every project at a glance
 Naming rather than locating projects is deliberate: the caller is frequently
 not sitting in the project's directory.
 
+### Tagging independently-versioned projects
+
+Projects that move independently need distinguishable tags — otherwise they
+collide the moment two of them reach the same version, and nothing can tell
+which project a pushed tag refers to.
+
+```toml
+[git]
+commit_message = "chore({project}): release {new_version}"
+tag_pattern = "{project}-v{new_version}"      # one pattern covers every project
+
+[[project]]
+name = "api"
+files = ["services/api/Cargo.toml"]
+tag_pattern = "api-v{new_version}"            # or override per project
+```
+
+A tag then identifies its own project, so CI can pass the pushed tag straight
+through without knowing which project it names:
+
+```yaml
+- uses: okcodes/vump/.github/actions/check@main
+  with:
+    version: ${{ github.ref_name }}     # api-v1.2.3 checks the api project
+```
+
+If two projects would produce the same tag, vump says so rather than guessing.
+
 ## Supported files
 
 Recognized by filename. Rewrites change the version and nothing else — key

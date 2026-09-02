@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::domain::tag::{self, TagPattern, TagPatternError};
+
 /// The name of the configuration file, searched for from the working directory
 /// upward.
 pub const FILE_NAME: &str = "vump.toml";
@@ -46,6 +48,13 @@ pub struct Project {
     pub name: Option<String>,
     /// Version files, as paths relative to the directory holding `vump.toml`.
     pub files: Vec<String>,
+    /// Tag template for this project, overriding the repository-wide one.
+    ///
+    /// Independently-versioned projects need distinct tags: without this they
+    /// would all be tagged `v1.2.3`, colliding the moment two of them reach the
+    /// same version, and leaving no way to tell which project a pushed tag
+    /// refers to.
+    pub tag_pattern: Option<String>,
 }
 
 /// Git integration settings.
@@ -173,6 +182,38 @@ pub enum ConfigError {
         /// The requested name.
         name: String,
     },
+
+    /// A tag pattern names a project in a repository that has none.
+    #[error(
+        "tag pattern {pattern:?} refers to a project name, but this repository declares a single unnamed project"
+    )]
+    ProjectPlaceholderUnavailable {
+        /// The offending pattern.
+        pattern: String,
+    },
+
+    /// A tag pattern cannot be used to name or read tags.
+    #[error("{}: {source}", match project {
+        Some(name) => format!("project {name:?}"),
+        None => "[git].tag_pattern".to_owned(),
+    })]
+    UnusableTagPattern {
+        /// The project the pattern belongs to, if it is not the shared one.
+        project: Option<String>,
+        /// What is wrong with it.
+        source: TagPatternError,
+    },
+
+    /// Several projects claim the same tag.
+    #[error(
+        "tag {tag:?} matches more than one project ({projects}); give each a distinct tag_pattern, or select one with --project"
+    )]
+    AmbiguousTag {
+        /// The tag that could not be attributed.
+        tag: String,
+        /// Comma-separated names of the projects that matched.
+        projects: String,
+    },
 }
 
 impl Config {
@@ -205,6 +246,7 @@ impl Config {
             vec![Project {
                 name: None,
                 files: raw.files,
+                tag_pattern: None,
             }]
         } else {
             let mut seen: Vec<String> = Vec::new();
@@ -232,6 +274,7 @@ impl Config {
                 projects.push(Project {
                     name: Some(name),
                     files: entry.files,
+                    tag_pattern: entry.tag_pattern,
                 });
             }
             projects
@@ -315,6 +358,94 @@ impl Config {
         matches!(self.projects.as_slice(), [only] if only.name.is_none())
     }
 
+    /// The tag template for `project`, with the project name substituted.
+    ///
+    /// A project's own pattern wins over the repository-wide one, which is what
+    /// lets independently-versioned projects carry distinguishable tags.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ConfigError`] when the resulting pattern is unusable — it
+    /// names a project in a repository whose single project is unnamed, or it
+    /// does not place the version exactly once.
+    pub fn tag_pattern_for(&self, project: &Project) -> Result<TagPattern, ConfigError> {
+        let template = project
+            .tag_pattern
+            .as_deref()
+            .unwrap_or(&self.git.tag_pattern);
+
+        let resolved =
+            tag::apply_project_name(template, project.name.as_deref()).ok_or_else(|| {
+                ConfigError::ProjectPlaceholderUnavailable {
+                    pattern: template.to_owned(),
+                }
+            })?;
+
+        TagPattern::parse(&resolved).map_err(|source| ConfigError::UnusableTagPattern {
+            project: project.name.clone(),
+            source,
+        })
+    }
+
+    /// Finds the project a tag belongs to, and the version it claims.
+    ///
+    /// This is what lets CI verify a pushed tag without being told separately
+    /// which project it refers to.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ConfigError`] when more than one project claims the tag,
+    /// which means their patterns do not distinguish them.
+    pub fn project_for_tag(
+        &self,
+        tag: &str,
+    ) -> Result<Option<(&Project, semver::Version)>, ConfigError> {
+        let mut matched: Vec<(&Project, semver::Version)> = Vec::new();
+
+        for project in &self.projects {
+            // A project whose pattern is unusable is skipped rather than
+            // failing the lookup: the error belongs to whichever command
+            // actually needs that project.
+            let Ok(pattern) = self.tag_pattern_for(project) else {
+                continue;
+            };
+            if let Some(version) = pattern.extract(tag) {
+                matched.push((project, version));
+            }
+        }
+
+        match matched.len() {
+            0 => Ok(None),
+            1 => Ok(matched.into_iter().next()),
+            _ => Err(ConfigError::AmbiguousTag {
+                tag: tag.to_owned(),
+                projects: matched
+                    .iter()
+                    .filter_map(|(p, _)| p.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            }),
+        }
+    }
+
+    /// The tag templates every project would produce, for diagnostics.
+    ///
+    /// Patterns that cannot be resolved are omitted: this exists to help a
+    /// reader recognize their mistake, not to report a second one.
+    #[must_use]
+    pub fn tag_patterns(&self) -> Vec<String> {
+        self.projects
+            .iter()
+            .filter_map(|project| {
+                let template = project
+                    .tag_pattern
+                    .as_deref()
+                    .unwrap_or(&self.git.tag_pattern);
+                tag::apply_project_name(template, project.name.as_deref())
+            })
+            .collect()
+    }
+
     /// Declared project names joined by `separator`.
     #[must_use]
     pub fn project_names(&self, separator: &str) -> String {
@@ -336,22 +467,26 @@ impl Config {
 }
 
 impl GitSettings {
-    /// Renders a template, substituting the new version for `{new_version}`.
+    /// Renders a template, substituting the version and the project name.
+    ///
+    /// `{project}` is available here as well as in tag patterns: in a
+    /// multi-project repository a message saying only "bump version to v1.0.1"
+    /// does not say *whose* version moved, and every project's commits read
+    /// identically.
+    ///
+    /// A `{project}` in a repository whose single project is unnamed has
+    /// nothing to stand for and is dropped, leaving the surrounding text.
     #[must_use]
-    pub fn render(template: &str, version: &semver::Version) -> String {
-        template.replace(VERSION_PLACEHOLDER, &version.to_string())
+    pub fn render(template: &str, project: Option<&str>, version: &semver::Version) -> String {
+        template
+            .replace(tag::PROJECT_PLACEHOLDER, project.unwrap_or_default())
+            .replace(VERSION_PLACEHOLDER, &version.to_string())
     }
 
     /// The commit message for `version`.
     #[must_use]
-    pub fn commit_message_for(&self, version: &semver::Version) -> String {
-        Self::render(&self.commit_message, version)
-    }
-
-    /// The tag name for `version`.
-    #[must_use]
-    pub fn tag_name_for(&self, version: &semver::Version) -> String {
-        Self::render(&self.tag_pattern, version)
+    pub fn commit_message_for(&self, project: Option<&str>, version: &semver::Version) -> String {
+        Self::render(&self.commit_message, project, version)
     }
 }
 
@@ -376,6 +511,7 @@ struct RawProject {
     name: String,
     #[serde(default)]
     files: Vec<String>,
+    tag_pattern: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -463,12 +599,40 @@ mod tests {
     #[test]
     fn templates_render_the_new_version() {
         let git = GitSettings::default();
-        let v: semver::Version = "1.2.3-rc.1".parse().unwrap();
+        let version: semver::Version = "1.2.3-rc.1".parse().unwrap();
         assert_eq!(
-            git.commit_message_for(&v),
+            git.commit_message_for(None, &version),
             "chore: bump version to v1.2.3-rc.1"
         );
-        assert_eq!(git.tag_name_for(&v), "v1.2.3-rc.1");
+    }
+
+    #[test]
+    fn a_commit_message_can_name_the_project() {
+        // Without this, every project's bump commit in a monorepo reads
+        // identically and says nothing about whose version moved.
+        let git = GitSettings {
+            commit_message: "chore({project}): release {new_version}".to_owned(),
+            ..GitSettings::default()
+        };
+        let version: semver::Version = "2.0.0".parse().unwrap();
+
+        assert_eq!(
+            git.commit_message_for(Some("api"), &version),
+            "chore(api): release 2.0.0"
+        );
+    }
+
+    #[test]
+    fn naming_a_project_that_has_none_leaves_the_rest_of_the_message() {
+        // A single-project repository has no name to substitute. Dropping the
+        // placeholder is better than refusing a commit over cosmetics.
+        let git = GitSettings {
+            commit_message: "bump {project} to {new_version}".to_owned(),
+            ..GitSettings::default()
+        };
+        let version: semver::Version = "1.0.0".parse().unwrap();
+
+        assert_eq!(git.commit_message_for(None, &version), "bump  to 1.0.0");
     }
 
     #[test]
@@ -553,6 +717,161 @@ mod tests {
             cfg.select(Some("nope")).unwrap_err(),
             ConfigError::UnknownProject { .. }
         ));
+    }
+
+    // ─── Tag patterns ────────────────────────────────────────────────────────
+
+    const MULTI: &str = r#"
+        [[project]]
+        name = "api"
+        files = ["api/Cargo.toml"]
+        tag_pattern = "api-v{new_version}"
+
+        [[project]]
+        name = "web"
+        files = ["web/package.json"]
+        tag_pattern = "web-v{new_version}"
+    "#;
+
+    fn v(text: &str) -> semver::Version {
+        text.parse().unwrap()
+    }
+
+    #[test]
+    fn a_project_pattern_overrides_the_repository_wide_one() {
+        let cfg = parse(MULTI).unwrap();
+        let api = cfg.select(Some("api")).unwrap();
+
+        assert_eq!(
+            cfg.tag_pattern_for(api).unwrap().render(&v("1.2.3")),
+            "api-v1.2.3"
+        );
+    }
+
+    #[test]
+    fn a_project_without_its_own_pattern_falls_back() {
+        let cfg = parse(
+            r#"
+            [git]
+            tag_pattern = "release-{new_version}"
+
+            [[project]]
+            name = "api"
+            files = ["api/Cargo.toml"]
+            "#,
+        )
+        .unwrap();
+
+        let api = cfg.select(Some("api")).unwrap();
+        assert_eq!(
+            cfg.tag_pattern_for(api).unwrap().render(&v("1.0.0")),
+            "release-1.0.0"
+        );
+    }
+
+    #[test]
+    fn one_repository_wide_pattern_can_name_every_project() {
+        // The {project} placeholder avoids repeating a pattern per project.
+        let cfg = parse(
+            r#"
+            [git]
+            tag_pattern = "{project}-v{new_version}"
+
+            [[project]]
+            name = "api"
+            files = ["api/Cargo.toml"]
+
+            [[project]]
+            name = "web"
+            files = ["web/package.json"]
+            "#,
+        )
+        .unwrap();
+
+        for (name, expected) in [("api", "api-v2.0.0"), ("web", "web-v2.0.0")] {
+            let project = cfg.select(Some(name)).unwrap();
+            assert_eq!(
+                cfg.tag_pattern_for(project).unwrap().render(&v("2.0.0")),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn naming_a_project_that_has_no_name_is_rejected() {
+        let cfg = parse(
+            r#"
+            files = ["VERSION"]
+            [git]
+            tag_pattern = "{project}-v{new_version}"
+            "#,
+        )
+        .unwrap();
+
+        let err = cfg.tag_pattern_for(&cfg.projects[0]).unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::ProjectPlaceholderUnavailable { .. }
+        ));
+    }
+
+    #[test]
+    fn a_pattern_without_a_version_is_rejected() {
+        let cfg = parse("files = [\"VERSION\"]\n[git]\ntag_pattern = \"release\"\n").unwrap();
+        let err = cfg.tag_pattern_for(&cfg.projects[0]).unwrap_err();
+        assert!(matches!(err, ConfigError::UnusableTagPattern { .. }));
+    }
+
+    #[test]
+    fn a_tag_identifies_the_project_that_produced_it() {
+        let cfg = parse(MULTI).unwrap();
+
+        let (project, version) = cfg.project_for_tag("api-v1.2.3").unwrap().unwrap();
+        assert_eq!(project.name.as_deref(), Some("api"));
+        assert_eq!(version, v("1.2.3"));
+
+        let (project, version) = cfg.project_for_tag("web-v4.5.6-rc.1").unwrap().unwrap();
+        assert_eq!(project.name.as_deref(), Some("web"));
+        assert_eq!(version, v("4.5.6-rc.1"));
+    }
+
+    #[test]
+    fn a_tag_no_project_produces_matches_nothing() {
+        let cfg = parse(MULTI).unwrap();
+        // A bare version is not a tag this repository would create; the caller
+        // falls back to selecting a project explicitly.
+        assert!(cfg.project_for_tag("1.2.3").unwrap().is_none());
+        assert!(cfg.project_for_tag("other-v1.2.3").unwrap().is_none());
+    }
+
+    #[test]
+    fn projects_sharing_a_pattern_cannot_attribute_a_tag() {
+        // This is the collision per-project patterns exist to prevent, and it
+        // must be reported rather than guessed at.
+        let cfg = parse(
+            r#"
+            [[project]]
+            name = "api"
+            files = ["api/Cargo.toml"]
+
+            [[project]]
+            name = "web"
+            files = ["web/package.json"]
+            "#,
+        )
+        .unwrap();
+
+        let err = cfg.project_for_tag("v1.2.3").unwrap_err();
+        assert!(matches!(err, ConfigError::AmbiguousTag { .. }));
+    }
+
+    #[test]
+    fn a_single_project_repository_still_recognizes_its_own_tags() {
+        let cfg = parse(r#"files = ["VERSION"]"#).unwrap();
+
+        let (project, version) = cfg.project_for_tag("v1.2.3").unwrap().unwrap();
+        assert!(project.name.is_none());
+        assert_eq!(version, v("1.2.3"));
     }
 
     #[test]

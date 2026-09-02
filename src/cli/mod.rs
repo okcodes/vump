@@ -466,14 +466,18 @@ fn interactive(ctx: &Context) -> Result<Exit, CliError> {
         None => intent_from(ask.choose_git()?),
     };
 
+    let tag_pattern = ctx.config.tag_pattern_for(&project)?;
     let plan = app::bump::plan_from(
         &ctx.fs,
         &ctx.root,
         &project,
         Some(base),
         *transition,
-        &ctx.config.git,
-        intent,
+        app::bump::GitPlanning {
+            intent,
+            commit_message: &ctx.config.git.commit_message,
+            tag: &tag_pattern,
+        },
     )?;
 
     if !ask.confirm(&render::summary(&plan))? {
@@ -587,14 +591,18 @@ fn bump(
 ) -> Result<Exit, CliError> {
     let project = ctx.config.select(ctx.project.as_deref())?;
     let intent = git_args.intent(&ctx.config.git);
+    let tag_pattern = ctx.config.tag_pattern_for(project)?;
 
     let plan = app::bump::plan(
         &ctx.fs,
         &ctx.root,
         project,
         transition,
-        &ctx.config.git,
-        intent,
+        app::bump::GitPlanning {
+            intent,
+            commit_message: &ctx.config.git.commit_message,
+            tag: &tag_pattern,
+        },
     )?;
 
     if dry_run {
@@ -616,14 +624,49 @@ fn bump(
     })
 }
 
+/// Verifies that a project's files record the version a tag claims.
+///
+/// The argument may be a full tag (`api-v1.2.3`) or a bare version (`1.2.3`).
+/// A tag identifies its own project, which is what lets a CI job pass
+/// `github.ref_name` straight through without knowing which project it names.
 fn check(ctx: &Context, version: &str) -> Result<Exit, CliError> {
-    let expected =
-        app::check::parse_expected(version).map_err(|e| CliError::InvalidVersionArgument {
-            text: version.to_owned(),
-            detail: e.to_string(),
-        })?;
+    let (project, expected) =
+        if let Some((project, from_tag)) = ctx.config.project_for_tag(version)? {
+            // An explicit selection must not silently disagree with the tag.
+            if let Some(requested) = ctx.project.as_deref() {
+                let selected = ctx.config.select(Some(requested))?;
+                if selected.name != project.name {
+                    return Err(CliError::TagProjectMismatch {
+                        tag: version.to_owned(),
+                        from_tag: project.name.clone().unwrap_or_default(),
+                        requested: requested.to_owned(),
+                    });
+                }
+            }
+            (project, from_tag)
+        } else {
+            // Not a tag this repository would produce, so it is read as a bare
+            // version and the project selected the usual way.
+            let expected = app::check::parse_expected(version).map_err(|e| {
+                // Reporting only "not a version" is unhelpful for something that
+                // clearly looks like a tag, so the patterns that were tried are
+                // named.
+                let patterns = ctx.config.tag_patterns();
+                if version.contains('-') && !patterns.is_empty() {
+                    CliError::UnrecognizedTag {
+                        tag: version.to_owned(),
+                        patterns: patterns.join(", "),
+                    }
+                } else {
+                    CliError::InvalidVersionArgument {
+                        text: version.to_owned(),
+                        detail: e.to_string(),
+                    }
+                }
+            })?;
+            (ctx.config.select(ctx.project.as_deref())?, expected)
+        };
 
-    let project = ctx.config.select(ctx.project.as_deref())?;
     let report = app::check::check(&ctx.fs, &ctx.root, project, expected)?;
 
     render::check(&report, ctx.json);
@@ -703,6 +746,16 @@ enum CliError {
     #[error("{text:?} is not a valid version: {detail}")]
     InvalidVersionArgument { text: String, detail: String },
 
+    #[error("tag {tag:?} belongs to project {from_tag:?}, but --project {requested:?} was given")]
+    TagProjectMismatch {
+        tag: String,
+        from_tag: String,
+        requested: String,
+    },
+
+    #[error("{tag:?} is neither a version nor a tag any project produces ({patterns})")]
+    UnrecognizedTag { tag: String, patterns: String },
+
     #[error("cannot determine the current directory: {0}")]
     WorkingDirectory(String),
 }
@@ -711,7 +764,9 @@ impl CliError {
     /// Maps a failure to its documented exit code.
     fn exit(&self) -> Exit {
         match self {
-            Self::InvalidVersionArgument { .. } => Exit::Usage,
+            Self::InvalidVersionArgument { .. }
+            | Self::TagProjectMismatch { .. }
+            | Self::UnrecognizedTag { .. } => Exit::Usage,
             Self::Config(_) => Exit::Config,
             Self::App(app) => app_exit(app),
             Self::Transition(_) => Exit::InvalidTransition,
