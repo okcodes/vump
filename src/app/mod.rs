@@ -18,7 +18,7 @@ use semver::Version;
 use thiserror::Error;
 
 use crate::config::Project;
-use crate::domain::version_file::{self, Format, LockScope, VersionFileError};
+use crate::domain::version_file::{self, LockFile, Tracked, VersionFileError};
 use crate::ports::{FileSystem, FsError};
 
 /// A version file and the version currently recorded in it.
@@ -76,8 +76,7 @@ pub fn read_project_versions(
     root: &Path,
     project: &Project,
 ) -> Result<Vec<FileVersion>, AppError> {
-    let names = cargo_package_names(fs, root, project.files.iter().map(String::as_str));
-    let scope = lock_scope(&names);
+    let packages = cargo_package_names(fs, root, project.files.iter().map(String::as_str));
     let mut versions = Vec::with_capacity(project.files.len());
 
     for declared in &project.files {
@@ -87,7 +86,7 @@ pub fn read_project_versions(
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or(declared.as_str());
-        let format = Format::require(file_name)?;
+        let tracked = Tracked::require(file_name)?;
 
         if !fs.is_file(&absolute) {
             return Err(AppError::MissingFile {
@@ -96,7 +95,10 @@ pub fn read_project_versions(
         }
 
         let contents = fs.read(&absolute)?;
-        let version = format.read(declared, &contents, scope)?;
+        let version = match tracked {
+            Tracked::Manifest(format) => format.read(declared, &contents)?,
+            Tracked::Lock(lock) => lock.read(declared, &contents, &packages)?,
+        };
 
         versions.push(FileVersion {
             path: declared.clone(),
@@ -104,7 +106,7 @@ pub fn read_project_versions(
         });
     }
 
-    check_declared_locks(fs, root, project, scope)?;
+    check_declared_locks(fs, root, project, &packages)?;
 
     Ok(versions)
 }
@@ -127,19 +129,6 @@ pub(crate) fn cargo_package_names<'a>(
         .collect()
 }
 
-/// Which lock entries `names` selects.
-///
-/// With no manifest to name a package — a project tracking only a lock file,
-/// or a virtual workspace manifest that declares none — the only inference
-/// left is that the repository builds exactly one.
-pub(crate) fn lock_scope(names: &[String]) -> LockScope<'_> {
-    if names.is_empty() {
-        LockScope::Sole
-    } else {
-        LockScope::Named(names)
-    }
-}
-
 /// The final component of a configured path.
 fn file_name_of(declared: &str) -> &str {
     declared.rsplit_once('/').map_or(declared, |(_, name)| name)
@@ -160,28 +149,28 @@ fn check_declared_locks(
     fs: &dyn FileSystem,
     root: &Path,
     project: &Project,
-    scope: LockScope<'_>,
+    packages: &[String],
 ) -> Result<(), AppError> {
     for declared in &project.files {
-        let Some((candidates, format)) = companion_locks(declared) else {
+        let Some((candidates, lock)) = companion_locks(declared) else {
             continue;
         };
 
-        for lock in candidates {
-            if project.files.contains(&lock) {
+        for path in candidates {
+            if project.files.contains(&path) {
                 break;
             }
 
-            let absolute = resolve(root, &lock);
+            let absolute = resolve(root, &path);
             if !fs.is_file(&absolute) {
                 continue;
             }
 
             // Reading it decides whether it is one vump could keep in step.
             let contents = fs.read(&absolute)?;
-            if format.read(&lock, &contents, scope).is_ok() {
+            if lock.read(&path, &contents, packages).is_ok() {
                 return Err(AppError::UndeclaredLock {
-                    lock,
+                    lock: path,
                     manifest: declared.clone(),
                 });
             }
@@ -198,14 +187,14 @@ fn check_declared_locks(
 /// `yarn.lock` or `pnpm-lock.yaml` carries none — Yarn pins its workspace at a
 /// placeholder precisely so a bump does not churn the file — so a bump never
 /// invalidates one.
-fn companion_locks(declared: &str) -> Option<(Vec<String>, Format)> {
+fn companion_locks(declared: &str) -> Option<(Vec<String>, LockFile)> {
     let (directory, name) = declared
         .rsplit_once('/')
         .map_or(("", declared), |(dir, name)| (dir, name));
 
     let (lock, format) = match name {
-        "Cargo.toml" => ("Cargo.lock", Format::CargoLock),
-        "package.json" => ("package-lock.json", Format::PackageLock),
+        "Cargo.toml" => ("Cargo.lock", LockFile::Cargo),
+        "package.json" => ("package-lock.json", LockFile::Npm),
         _ => return None,
     };
 
@@ -312,7 +301,10 @@ mod tests {
         // Writing the manifest without it leaves `cargo build --locked` failing
         // on a tree a tag already claims is correct.
         let fs = MemoryFileSystem::new()
-            .with_file("/repo/Cargo.toml", "[package]\nversion = \"1.2.3\"\n")
+            .with_file(
+                "/repo/Cargo.toml",
+                "[package]\nname = \"demo\"\nversion = \"1.2.3\"\n",
+            )
             .with_file("/repo/Cargo.lock", lock(&["demo"]));
 
         let err =
@@ -327,7 +319,10 @@ mod tests {
     #[test]
     fn a_declared_lock_is_read_like_any_other_file() {
         let fs = MemoryFileSystem::new()
-            .with_file("/repo/Cargo.toml", "[package]\nversion = \"1.2.3\"\n")
+            .with_file(
+                "/repo/Cargo.toml",
+                "[package]\nname = \"demo\"\nversion = \"1.2.3\"\n",
+            )
             .with_file("/repo/Cargo.lock", lock(&["demo"]));
 
         let versions = read_project_versions(
@@ -343,20 +338,48 @@ mod tests {
     }
 
     #[test]
-    fn a_lock_vump_cannot_write_is_not_demanded() {
-        // A workspace lock records no single project version, so asking for it
-        // to be declared would only produce a second refusal.
+    fn a_shared_lock_is_demanded_even_when_it_holds_other_members() {
+        // It records this project's package alongside another's, and vump can
+        // now keep that entry in step — so leaving it undeclared is the same
+        // stale lock as before.
         let fs = MemoryFileSystem::new()
-            .with_file("/repo/Cargo.toml", "[package]\nversion = \"1.2.3\"\n")
-            .with_file("/repo/Cargo.lock", lock(&["demo", "demo-cli"]));
+            .with_file(
+                "/repo/Cargo.toml",
+                "[package]\nname = \"demo\"\nversion = \"1.2.3\"\n",
+            )
+            .with_file("/repo/Cargo.lock", lock(&["demo", "other"]));
 
-        assert!(read_project_versions(&fs, Path::new("/repo"), &project(&["Cargo.toml"])).is_ok());
+        let err =
+            read_project_versions(&fs, Path::new("/repo"), &project(&["Cargo.toml"])).unwrap_err();
+        assert!(
+            matches!(err, AppError::UndeclaredLock { ref lock, .. } if lock == "Cargo.lock"),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_lock_no_manifest_names_is_refused_rather_than_inferred() {
+        // Tracking a lock without the manifest that owns it leaves nothing to
+        // say which entry the project means.
+        let fs = MemoryFileSystem::new().with_file("/repo/Cargo.lock", lock(&["demo"]));
+
+        let err =
+            read_project_versions(&fs, Path::new("/repo"), &project(&["Cargo.lock"])).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                AppError::VersionFile(VersionFileError::UnidentifiedLock { .. })
+            ),
+            "got {err:?}"
+        );
     }
 
     #[test]
     fn a_manifest_with_no_lock_beside_it_is_fine() {
-        let fs = MemoryFileSystem::new()
-            .with_file("/repo/Cargo.toml", "[package]\nversion = \"1.2.3\"\n");
+        let fs = MemoryFileSystem::new().with_file(
+            "/repo/Cargo.toml",
+            "[package]\nname = \"demo\"\nversion = \"1.2.3\"\n",
+        );
 
         assert!(read_project_versions(&fs, Path::new("/repo"), &project(&["Cargo.toml"])).is_ok());
     }
