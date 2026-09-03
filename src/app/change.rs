@@ -308,6 +308,12 @@ pub fn apply(
         }
     }
 
+    // The same pairing the read side uses: a shared workspace lock records
+    // every member, and this project's manifests say which entries are its own.
+    let names =
+        crate::app::cargo_package_names(fs, root, changes.files.iter().map(|f| f.path.as_str()));
+    let scope = crate::app::lock_scope(&names);
+
     let mut written = Vec::with_capacity(changes.files.len());
     for file in &changes.files {
         let absolute = resolve(root, &file.path);
@@ -319,7 +325,7 @@ pub fn apply(
 
         let contents = fs.read(&absolute).map_err(AppError::from)?;
         let updated = format
-            .write(&file.path, &contents, &changes.target)
+            .write(&file.path, &contents, &changes.target, scope)
             .map_err(AppError::from)?;
         fs.write(&absolute, &updated).map_err(AppError::from)?;
 

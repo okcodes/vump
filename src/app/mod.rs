@@ -18,7 +18,7 @@ use semver::Version;
 use thiserror::Error;
 
 use crate::config::Project;
-use crate::domain::version_file::{Format, VersionFileError};
+use crate::domain::version_file::{self, Format, LockScope, VersionFileError};
 use crate::ports::{FileSystem, FsError};
 
 /// A version file and the version currently recorded in it.
@@ -76,6 +76,8 @@ pub fn read_project_versions(
     root: &Path,
     project: &Project,
 ) -> Result<Vec<FileVersion>, AppError> {
+    let names = cargo_package_names(fs, root, project.files.iter().map(String::as_str));
+    let scope = lock_scope(&names);
     let mut versions = Vec::with_capacity(project.files.len());
 
     for declared in &project.files {
@@ -94,7 +96,7 @@ pub fn read_project_versions(
         }
 
         let contents = fs.read(&absolute)?;
-        let version = format.read(declared, &contents)?;
+        let version = format.read(declared, &contents, scope)?;
 
         versions.push(FileVersion {
             path: declared.clone(),
@@ -102,9 +104,45 @@ pub fn read_project_versions(
         });
     }
 
-    check_declared_locks(fs, root, project)?;
+    check_declared_locks(fs, root, project, scope)?;
 
     Ok(versions)
+}
+
+/// The package names this project's Cargo manifests declare.
+///
+/// A shared workspace lock records every member it builds, so the entries a
+/// project means are the ones its own manifests name. Manifests that cannot be
+/// read are skipped here and reported by the pass that reads their version.
+pub(crate) fn cargo_package_names<'a>(
+    fs: &dyn FileSystem,
+    root: &Path,
+    declared: impl IntoIterator<Item = &'a str>,
+) -> Vec<String> {
+    declared
+        .into_iter()
+        .filter(|path| file_name_of(path) == "Cargo.toml")
+        .filter_map(|path| fs.read(&resolve(root, path)).ok())
+        .filter_map(|contents| version_file::cargo_package_name(&contents))
+        .collect()
+}
+
+/// Which lock entries `names` selects.
+///
+/// With no manifest to name a package — a project tracking only a lock file,
+/// or a virtual workspace manifest that declares none — the only inference
+/// left is that the repository builds exactly one.
+pub(crate) fn lock_scope(names: &[String]) -> LockScope<'_> {
+    if names.is_empty() {
+        LockScope::Sole
+    } else {
+        LockScope::Named(names)
+    }
+}
+
+/// The final component of a configured path.
+fn file_name_of(declared: &str) -> &str {
+    declared.rsplit_once('/').map_or(declared, |(_, name)| name)
 }
 
 /// Refuses a lock file that records this project's version but is not declared.
@@ -122,27 +160,32 @@ fn check_declared_locks(
     fs: &dyn FileSystem,
     root: &Path,
     project: &Project,
+    scope: LockScope<'_>,
 ) -> Result<(), AppError> {
     for declared in &project.files {
-        let Some((lock, format)) = companion_lock(declared) else {
+        let Some((candidates, format)) = companion_locks(declared) else {
             continue;
         };
-        if project.files.contains(&lock) {
-            continue;
-        }
 
-        let absolute = resolve(root, &lock);
-        if !fs.is_file(&absolute) {
-            continue;
-        }
+        for lock in candidates {
+            if project.files.contains(&lock) {
+                break;
+            }
 
-        // Reading it decides whether it is one vump could keep in step.
-        let contents = fs.read(&absolute)?;
-        if format.read(&lock, &contents).is_ok() {
-            return Err(AppError::UndeclaredLock {
-                lock,
-                manifest: declared.clone(),
-            });
+            let absolute = resolve(root, &lock);
+            if !fs.is_file(&absolute) {
+                continue;
+            }
+
+            // Reading it decides whether it is one vump could keep in step.
+            let contents = fs.read(&absolute)?;
+            if format.read(&lock, &contents, scope).is_ok() {
+                return Err(AppError::UndeclaredLock {
+                    lock,
+                    manifest: declared.clone(),
+                });
+            }
+            break;
         }
     }
 
@@ -155,7 +198,7 @@ fn check_declared_locks(
 /// `yarn.lock` or `pnpm-lock.yaml` carries none — Yarn pins its workspace at a
 /// placeholder precisely so a bump does not churn the file — so a bump never
 /// invalidates one.
-fn companion_lock(declared: &str) -> Option<(String, Format)> {
+fn companion_locks(declared: &str) -> Option<(Vec<String>, Format)> {
     let (directory, name) = declared
         .rsplit_once('/')
         .map_or(("", declared), |(dir, name)| (dir, name));
@@ -166,13 +209,24 @@ fn companion_lock(declared: &str) -> Option<(String, Format)> {
         _ => return None,
     };
 
-    let path = if directory.is_empty() {
-        lock.to_owned()
-    } else {
-        format!("{directory}/{lock}")
-    };
+    // Nearest first: a workspace shares one lock at its root, so a member's
+    // lock may sit any number of directories above the manifest.
+    let mut candidates = Vec::new();
+    let mut current = Some(directory);
+    while let Some(dir) = current {
+        candidates.push(if dir.is_empty() {
+            lock.to_owned()
+        } else {
+            format!("{dir}/{lock}")
+        });
+        current = if dir.is_empty() {
+            None
+        } else {
+            Some(dir.rsplit_once('/').map_or("", |(parent, _)| parent))
+        };
+    }
 
-    Some((path, format))
+    Some((candidates, format))
 }
 
 /// Resolves a configured path against the configuration's directory.
@@ -311,26 +365,26 @@ mod tests {
     fn only_locks_recording_the_project_version_are_companions() {
         // yarn and pnpm locks carry no version for the project itself, so a
         // bump never invalidates one.
+        let paths =
+            |declared| companion_locks(declared).map(|(candidates, _)| candidates.join(", "));
+
+        assert_eq!(paths("Cargo.toml").as_deref(), Some("Cargo.lock"));
         assert_eq!(
-            companion_lock("Cargo.toml")
-                .map(|(path, _)| path)
-                .as_deref(),
-            Some("Cargo.lock")
+            paths("ui/package.json").as_deref(),
+            Some("ui/package-lock.json, package-lock.json")
         );
+        assert!(paths("yarn.lock").is_none());
+        assert!(paths("VERSION").is_none());
+    }
+
+    #[test]
+    fn a_member_looks_upward_for_a_shared_workspace_lock() {
+        // A workspace keeps one lock at its root, however deep the member sits.
+        let (candidates, _) = companion_locks("crates/api/Cargo.toml").unwrap();
         assert_eq!(
-            companion_lock("crates/api/Cargo.toml")
-                .map(|(path, _)| path)
-                .as_deref(),
-            Some("crates/api/Cargo.lock")
+            candidates,
+            ["crates/api/Cargo.lock", "crates/Cargo.lock", "Cargo.lock"]
         );
-        assert_eq!(
-            companion_lock("ui/package.json")
-                .map(|(path, _)| path)
-                .as_deref(),
-            Some("ui/package-lock.json")
-        );
-        assert!(companion_lock("yarn.lock").is_none());
-        assert!(companion_lock("VERSION").is_none());
     }
 
     #[test]

@@ -114,11 +114,25 @@ access and no knowledge of the dependency graph?**
 pins its workspace at a placeholder precisely so a bump does not churn the file
 — so they never go stale from a bump and are not tracked.
 
-In `Cargo.lock` the entry to write is the sole `[[package]]` carrying no
-`source`, since Cargo records one for everything it fetched. This makes the
-lock self-describing: it needs no manifest to interpret. A workspace has
-several such entries, at which point the lock cannot say which project a
-version belongs to, and it is refused rather than guessed at.
+In `Cargo.lock` the entries that belong to the repository are the
+`[[package]]` records carrying no `source`, since Cargo records one for
+everything it fetched. A single-crate repository has one, and it needs no
+naming.
+
+A workspace has one such entry per member, and the lock alone cannot say which
+of them a project means — so the manifests declared alongside it do. Each
+`Cargo.toml` names its package, and the entries a project writes are exactly
+the ones its own manifests name. That covers both shapes a workspace takes:
+members held at one version declare every manifest in a single project and
+move together, while independently-versioned members declare one manifest each
+and touch only their own entry. Members that are not declared are not touched.
+
+Entries in scope must agree with each other. They describe one project moving
+as a unit, so a disagreement between them is the same defect as a manifest
+disagreeing with its lock, and is reported rather than resolved by preferring
+one. Where nothing names a package — a project tracking a lock with no
+manifest — the only inference left is that the repository builds exactly one,
+and more than one is refused.
 
 An npm lock records the version at the top level, and from `lockfileVersion` 2
 onwards again under `packages[""]`. Both are written, because `npm ci` reads
@@ -129,7 +143,9 @@ them already disagreeing means the file is corrupt, and it is refused rather
 than settled by preferring one.
 
 **A lock file that records the version but is not declared is refused before
-anything is written**, naming the file to add. Writing the manifest alone would
+anything is written**, naming the file to add. The search runs from the
+manifest's own directory upward, because a workspace keeps one lock at its
+root however deep the member sits. Writing the manifest alone would
 produce a tag describing a tree that cannot be built from it — the exact defect
 vump exists to prevent — and reporting it after the commit and tag already
 exist makes recovery cost a tag deletion, a reset, and a redone release.

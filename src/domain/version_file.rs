@@ -16,6 +16,25 @@ use semver::Version;
 use thiserror::Error;
 use toml_edit::DocumentMut;
 
+/// Which entries of a lock file describe the project being versioned.
+///
+/// A lock file is the one format that can record several versions: a workspace
+/// locks every member it builds, each at its own. Which of them a project means
+/// is not answerable from the lock alone, so it is supplied by the caller,
+/// which knows the manifests declared alongside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockScope<'a> {
+    /// The only package built from this repository.
+    ///
+    /// The inference available when nothing names the project: a single-crate
+    /// repository locks exactly one package of its own. More than one is
+    /// refused rather than guessed at.
+    Sole,
+    /// The packages with these names, taken from the manifests declared with
+    /// the lock file.
+    Named(&'a [String]),
+}
+
 /// A file format vump knows how to read a version from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
@@ -173,7 +192,12 @@ impl Format {
     ///
     /// Returns a [`VersionFileError`] when the contents cannot be parsed, carry
     /// no version, or carry one that is not valid semver.
-    pub fn read(self, file: &str, contents: &str) -> Result<Version, VersionFileError> {
+    pub fn read(
+        self,
+        file: &str,
+        contents: &str,
+        scope: LockScope<'_>,
+    ) -> Result<Version, VersionFileError> {
         let raw = match self {
             Self::PackageJson => {
                 let span = find_package_json_version(contents).ok_or_else(|| {
@@ -185,7 +209,7 @@ impl Format {
                 contents[span].to_owned()
             }
             Self::CargoToml => read_cargo_version(file, contents)?,
-            Self::CargoLock => read_cargo_lock_version(file, contents)?,
+            Self::CargoLock => read_cargo_lock_version(file, contents, scope)?,
             Self::PackageLock => read_package_lock_version(file, contents)?,
             Self::PlainText => contents.trim().to_owned(),
         };
@@ -219,6 +243,7 @@ impl Format {
         file: &str,
         contents: &str,
         version: &Version,
+        scope: LockScope<'_>,
     ) -> Result<String, VersionFileError> {
         match self {
             Self::PackageJson => {
@@ -235,7 +260,7 @@ impl Format {
                 Ok(out)
             }
             Self::CargoToml => write_cargo_version(file, contents, version),
-            Self::CargoLock => write_cargo_lock_version(file, contents, version),
+            Self::CargoLock => write_cargo_lock_version(file, contents, version, scope),
             Self::PackageLock => write_package_lock_version(file, contents, version),
             // The version is the whole file, so a trailing newline is the only
             // formatting there is to preserve.
@@ -281,6 +306,22 @@ fn read_cargo_version(file: &str, contents: &str) -> Result<String, VersionFileE
             file: file.to_owned(),
             field: "[package].version".to_owned(),
         })
+}
+
+/// Reads the package name a Cargo manifest declares.
+///
+/// This is what pairs a manifest with its entry in a shared workspace lock.
+/// A virtual workspace manifest declares no package and so yields nothing.
+#[must_use]
+pub fn cargo_package_name(contents: &str) -> Option<String> {
+    contents
+        .parse::<DocumentMut>()
+        .ok()?
+        .get("package")?
+        .as_table_like()?
+        .get("name")?
+        .as_str()
+        .map(str::to_owned)
 }
 
 /// Rewrites `[package].version`, preserving the rest of the document.
@@ -370,62 +411,96 @@ fn write_package_lock_version(
     Ok(out)
 }
 
-/// Reads the version of the package this lock file was generated for.
-fn read_cargo_lock_version(file: &str, contents: &str) -> Result<String, VersionFileError> {
+/// Reads the version this lock file records for the project's packages.
+///
+/// Every entry in scope must agree. They describe one project moving as a
+/// unit, so a disagreement between them is the same defect as a manifest and
+/// its lock disagreeing, and is reported rather than resolved by picking one.
+fn read_cargo_lock_version(
+    file: &str,
+    contents: &str,
+    scope: LockScope<'_>,
+) -> Result<String, VersionFileError> {
     let doc = parse_cargo(file, contents)?;
-    let index = local_package(file, &doc)?;
+    let entries = local_packages(file, &doc, scope)?;
 
-    doc.get("package")
-        .and_then(toml_edit::Item::as_array_of_tables)
-        .and_then(|tables| tables.get(index))
-        .and_then(|table| table.get("version"))
-        .and_then(toml_edit::Item::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| VersionFileError::MissingField {
+    let mut versions = entries.iter().map(|entry| entry.version.as_str());
+    let first = versions.next().unwrap_or_default().to_owned();
+
+    if let Some(other) = versions.find(|v| *v != first) {
+        return Err(VersionFileError::InconsistentLock {
             file: file.to_owned(),
-            field: "[[package]].version".to_owned(),
-        })
+            root: first,
+            nested: other.to_owned(),
+        });
+    }
+
+    Ok(first)
 }
 
-/// Rewrites the local package's version, preserving the rest of the document.
+/// Rewrites the version of every package in scope, preserving everything else.
 fn write_cargo_lock_version(
     file: &str,
     contents: &str,
     version: &Version,
+    scope: LockScope<'_>,
 ) -> Result<String, VersionFileError> {
-    // Reading first rejects a lock with no local package, or with more than
-    // one, before any mutation is attempted.
-    read_cargo_lock_version(file, contents)?;
+    // Reading first rejects a lock naming none of the project's packages, or
+    // recording them inconsistently, before any mutation is attempted.
+    read_cargo_lock_version(file, contents, scope)?;
 
     let mut doc = parse_cargo(file, contents)?;
-    let index = local_package(file, &doc)?;
+    let indexes: Vec<usize> = local_packages(file, &doc, scope)?
+        .iter()
+        .map(|entry| entry.index)
+        .collect();
 
-    let slot = doc
+    let tables = doc
         .get_mut("package")
         .and_then(toml_edit::Item::as_array_of_tables_mut)
-        .and_then(|tables| tables.get_mut(index))
-        .and_then(|table| table.get_mut("version"))
-        .and_then(toml_edit::Item::as_value_mut)
         .ok_or_else(|| VersionFileError::MissingField {
             file: file.to_owned(),
-            field: "[[package]].version".to_owned(),
+            field: "[[package]]".to_owned(),
         })?;
 
-    let decor = slot.decor().clone();
-    *slot = toml_edit::Value::from(version.to_string());
-    *slot.decor_mut() = decor;
+    for index in indexes {
+        let slot = tables
+            .get_mut(index)
+            .and_then(|table| table.get_mut("version"))
+            .and_then(toml_edit::Item::as_value_mut)
+            .ok_or_else(|| VersionFileError::MissingField {
+                file: file.to_owned(),
+                field: "[[package]].version".to_owned(),
+            })?;
+
+        // Assigning through the existing value keeps its surrounding
+        // whitespace and any trailing comment on the line.
+        let decor = slot.decor().clone();
+        *slot = toml_edit::Value::from(version.to_string());
+        *slot.decor_mut() = decor;
+    }
 
     Ok(doc.to_string())
 }
 
-/// Locates the sole `[[package]]` entry built from this repository.
+/// One `[[package]]` entry that belongs to the project being versioned.
+struct LocalPackage {
+    index: usize,
+    version: String,
+}
+
+/// Selects the `[[package]]` entries that belong to the project.
 ///
 /// Cargo records a `source` for everything it fetched, so the entries without
-/// one are exactly those built from the working tree. A single-crate project
-/// has one, and it is the project itself. A workspace has several, at which
-/// point the lock file alone cannot say which project a given version belongs
-/// to — so it is refused rather than guessed at.
-fn local_package(file: &str, doc: &DocumentMut) -> Result<usize, VersionFileError> {
+/// one are exactly those built from the working tree. Which of those the
+/// project means depends on the scope: a single-crate repository has one and
+/// it needs no naming, while a workspace locks every member and only the
+/// manifests declared alongside say which are in play.
+fn local_packages(
+    file: &str,
+    doc: &DocumentMut,
+    scope: LockScope<'_>,
+) -> Result<Vec<LocalPackage>, VersionFileError> {
     let packages = doc
         .get("package")
         .and_then(toml_edit::Item::as_array_of_tables)
@@ -434,34 +509,67 @@ fn local_package(file: &str, doc: &DocumentMut) -> Result<usize, VersionFileErro
             field: "[[package]]".to_owned(),
         })?;
 
-    let local: Vec<(usize, &str)> = packages
+    let field = |table: &toml_edit::Table, key: &str| {
+        table
+            .get(key)
+            .and_then(toml_edit::Item::as_str)
+            .map(str::to_owned)
+    };
+
+    let local: Vec<(usize, String, String)> = packages
         .iter()
         .enumerate()
         .filter(|(_, table)| table.get("source").is_none())
         .map(|(index, table)| {
-            let name = table
-                .get("name")
-                .and_then(toml_edit::Item::as_str)
-                .unwrap_or("unnamed");
-            (index, name)
+            (
+                index,
+                field(table, "name").unwrap_or_else(|| "unnamed".to_owned()),
+                field(table, "version").unwrap_or_default(),
+            )
         })
         .collect();
 
-    match local.as_slice() {
-        [(index, _)] => Ok(*index),
-        [] => Err(VersionFileError::MissingField {
+    let selected: Vec<LocalPackage> = match scope {
+        LockScope::Sole => match local.as_slice() {
+            [(index, _, version)] => vec![LocalPackage {
+                index: *index,
+                version: version.clone(),
+            }],
+            [] => Vec::new(),
+            members => {
+                return Err(VersionFileError::WorkspaceLock {
+                    file: file.to_owned(),
+                    members: members
+                        .iter()
+                        .map(|(_, name, _)| name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                });
+            }
+        },
+        LockScope::Named(names) => local
+            .iter()
+            .filter(|(_, name, _)| names.iter().any(|wanted| wanted == name))
+            .map(|(index, _, version)| LocalPackage {
+                index: *index,
+                version: version.clone(),
+            })
+            .collect(),
+    };
+
+    if selected.is_empty() {
+        return Err(VersionFileError::MissingField {
             file: file.to_owned(),
-            field: "a [[package]] entry built from this repository".to_owned(),
-        }),
-        members => Err(VersionFileError::WorkspaceLock {
-            file: file.to_owned(),
-            members: members
-                .iter()
-                .map(|(_, name)| *name)
-                .collect::<Vec<_>>()
-                .join(", "),
-        }),
+            field: match scope {
+                LockScope::Sole => "a [[package]] entry built from this repository".to_owned(),
+                LockScope::Named(names) => {
+                    format!("a [[package]] entry for {}", names.join(" or "))
+                }
+            },
+        });
     }
+
+    Ok(selected)
 }
 
 fn parse_cargo(file: &str, contents: &str) -> Result<DocumentMut, VersionFileError> {
@@ -592,9 +700,13 @@ mod tests {
     #[test]
     fn reads_plain_text() {
         let f = Format::PlainText;
-        assert_eq!(f.read("VERSION", "1.2.3\n").unwrap(), v("1.2.3"));
         assert_eq!(
-            f.read("VERSION", "  1.2.3-rc.1  ").unwrap(),
+            f.read("VERSION", "1.2.3\n", LockScope::Sole).unwrap(),
+            v("1.2.3")
+        );
+        assert_eq!(
+            f.read("VERSION", "  1.2.3-rc.1  ", LockScope::Sole)
+                .unwrap(),
             v("1.2.3-rc.1")
         );
     }
@@ -602,7 +714,7 @@ mod tests {
     #[test]
     fn writes_plain_text_with_trailing_newline() {
         let out = Format::PlainText
-            .write("VERSION", "1.2.3\n", &v("1.3.0"))
+            .write("VERSION", "1.2.3\n", &v("1.3.0"), LockScope::Sole)
             .unwrap();
         assert_eq!(out, "1.3.0\n");
     }
@@ -611,7 +723,9 @@ mod tests {
     fn reads_package_json() {
         let src = r#"{"name":"app","version":"4.5.6"}"#;
         assert_eq!(
-            Format::PackageJson.read("package.json", src).unwrap(),
+            Format::PackageJson
+                .read("package.json", src, LockScope::Sole)
+                .unwrap(),
             v("4.5.6")
         );
     }
@@ -621,7 +735,7 @@ mod tests {
         // Deliberately unusual formatting: tabs, odd spacing, key order.
         let src = "{\n\t\"name\"  :  \"app\",\n\t\"version\":\t\"1.0.0\",\n\t\"scripts\": {\n\t\t\"build\": \"tsc\"\n\t}\n}\n";
         let out = Format::PackageJson
-            .write("package.json", src, &v("1.0.1"))
+            .write("package.json", src, &v("1.0.1"), LockScope::Sole)
             .unwrap();
 
         assert_eq!(out, src.replace("\"1.0.0\"", "\"1.0.1\""));
@@ -639,7 +753,9 @@ mod tests {
   },
   "version": "1.0.0"
 }"#;
-        let read = Format::PackageJson.read("package.json", src).unwrap();
+        let read = Format::PackageJson
+            .read("package.json", src, LockScope::Sole)
+            .unwrap();
         assert_eq!(
             read,
             v("1.0.0"),
@@ -647,7 +763,7 @@ mod tests {
         );
 
         let out = Format::PackageJson
-            .write("package.json", src, &v("2.0.0"))
+            .write("package.json", src, &v("2.0.0"), LockScope::Sole)
             .unwrap();
         assert!(
             out.contains(r#""version": "9.9.9""#),
@@ -665,7 +781,9 @@ mod tests {
   "version": "3.0.0"
 }"#;
         assert_eq!(
-            Format::PackageJson.read("package.json", src).unwrap(),
+            Format::PackageJson
+                .read("package.json", src, LockScope::Sole)
+                .unwrap(),
             v("3.0.0")
         );
     }
@@ -673,7 +791,7 @@ mod tests {
     #[test]
     fn package_json_without_a_version_is_reported() {
         let err = Format::PackageJson
-            .read("package.json", r#"{"name":"app"}"#)
+            .read("package.json", r#"{"name":"app"}"#, LockScope::Sole)
             .unwrap_err();
         assert!(matches!(err, VersionFileError::MissingField { .. }));
     }
@@ -682,7 +800,9 @@ mod tests {
     fn reads_cargo_toml() {
         let src = "[package]\nname = \"app\"\nversion = \"0.4.2\"\n";
         assert_eq!(
-            Format::CargoToml.read("Cargo.toml", src).unwrap(),
+            Format::CargoToml
+                .read("Cargo.toml", src, LockScope::Sole)
+                .unwrap(),
             v("0.4.2")
         );
     }
@@ -700,7 +820,7 @@ edition = \"2024\"
 serde = \"1\"
 ";
         let out = Format::CargoToml
-            .write("Cargo.toml", src, &v("0.5.0"))
+            .write("Cargo.toml", src, &v("0.5.0"), LockScope::Sole)
             .unwrap();
 
         assert!(out.contains("# Project manifest"));
@@ -725,7 +845,7 @@ serde = \"1\"
         for (lockfile_version, contents) in NPM_LOCKS {
             assert_eq!(
                 Format::PackageLock
-                    .read("package-lock.json", contents)
+                    .read("package-lock.json", contents, LockScope::Sole)
                     .unwrap(),
                 v("1.2.3"),
                 "lockfileVersion {lockfile_version}"
@@ -737,13 +857,15 @@ serde = \"1\"
     fn writes_every_place_an_npm_lock_records_the_project_version() {
         for (lockfile_version, contents) in NPM_LOCKS {
             let out = Format::PackageLock
-                .write("package-lock.json", contents, &v("2.0.0"))
+                .write("package-lock.json", contents, &v("2.0.0"), LockScope::Sole)
                 .unwrap();
 
             // Reading back is the check that matters: it fails if the two
             // records were left disagreeing.
             assert_eq!(
-                Format::PackageLock.read("package-lock.json", &out).unwrap(),
+                Format::PackageLock
+                    .read("package-lock.json", &out, LockScope::Sole)
+                    .unwrap(),
                 v("2.0.0"),
                 "lockfileVersion {lockfile_version}"
             );
@@ -761,7 +883,7 @@ serde = \"1\"
         // own entry. Only the path distinguishes them.
         for (lockfile_version, contents) in NPM_LOCKS {
             let out = Format::PackageLock
-                .write("package-lock.json", contents, &v("2.0.0"))
+                .write("package-lock.json", contents, &v("2.0.0"), LockScope::Sole)
                 .unwrap();
 
             assert_eq!(
@@ -776,7 +898,7 @@ serde = \"1\"
     fn an_npm_lock_stays_valid_json() {
         for (lockfile_version, contents) in NPM_LOCKS {
             let out = Format::PackageLock
-                .write("package-lock.json", contents, &v("2.0.0"))
+                .write("package-lock.json", contents, &v("2.0.0"), LockScope::Sole)
                 .unwrap();
             let parsed: serde_json::Value = serde_json::from_str(&out)
                 .unwrap_or_else(|e| panic!("lockfileVersion {lockfile_version} broke: {e}"));
@@ -800,7 +922,7 @@ serde = \"1\"
   }
 }"#;
         let err = Format::PackageLock
-            .read("package-lock.json", src)
+            .read("package-lock.json", src, LockScope::Sole)
             .unwrap_err();
         assert!(
             matches!(err, VersionFileError::InconsistentLock { .. }),
@@ -843,7 +965,9 @@ dependencies = [
     #[test]
     fn reads_the_version_of_the_package_built_from_this_repository() {
         assert_eq!(
-            Format::CargoLock.read("Cargo.lock", LOCK).unwrap(),
+            Format::CargoLock
+                .read("Cargo.lock", LOCK, LockScope::Sole)
+                .unwrap(),
             v("1.2.3")
         );
     }
@@ -853,7 +977,7 @@ dependencies = [
         // Every fetched package carries a `version` too, and the first one
         // appears before the local package. Only the sourceless entry is ours.
         let out = Format::CargoLock
-            .write("Cargo.lock", LOCK, &v("2.0.0"))
+            .write("Cargo.lock", LOCK, &v("2.0.0"), LockScope::Sole)
             .unwrap();
 
         assert!(
@@ -867,7 +991,7 @@ dependencies = [
     #[test]
     fn cargo_lock_preserves_everything_else() {
         let out = Format::CargoLock
-            .write("Cargo.lock", LOCK, &v("2.0.0"))
+            .write("Cargo.lock", LOCK, &v("2.0.0"), LockScope::Sole)
             .unwrap();
 
         // The generated-file header and the lock format version both sit above
@@ -878,13 +1002,111 @@ dependencies = [
         assert_eq!(out, LOCK.replace("\"1.2.3\"", "\"2.0.0\""));
     }
 
+    /// Cargo's own output for a two-member workspace. See `testdata/README.md`.
+    const WORKSPACE: &str = include_str!("testdata/cargo-workspace.lock");
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_named_member_is_read_from_a_shared_workspace_lock() {
+        let api = names(&["api"]);
+        assert_eq!(
+            Format::CargoLock
+                .read("Cargo.lock", WORKSPACE, LockScope::Named(&api))
+                .unwrap(),
+            v("1.0.0")
+        );
+
+        let web = names(&["web"]);
+        assert_eq!(
+            Format::CargoLock
+                .read("Cargo.lock", WORKSPACE, LockScope::Named(&web))
+                .unwrap(),
+            v("2.5.0")
+        );
+    }
+
+    #[test]
+    fn writing_one_member_leaves_its_siblings_alone() {
+        let api = names(&["api"]);
+        let out = Format::CargoLock
+            .write("Cargo.lock", WORKSPACE, &v("1.1.0"), LockScope::Named(&api))
+            .unwrap();
+
+        assert!(out.contains("name = \"api\"\nversion = \"1.1.0\""), "{out}");
+        // The sibling member and the fetched dependency are untouched.
+        assert!(out.contains("name = \"web\"\nversion = \"2.5.0\""), "{out}");
+        assert!(out.contains("version = \"1.0.28\""), "{out}");
+    }
+
+    #[test]
+    fn members_moving_together_are_all_written() {
+        // A workspace held at one version declares every member in one project,
+        // so every matching entry moves.
+        let both = names(&["api", "web"]);
+        let uniform = WORKSPACE.replace("version = \"2.5.0\"", "version = \"1.0.0\"");
+
+        let out = Format::CargoLock
+            .write("Cargo.lock", &uniform, &v("2.0.0"), LockScope::Named(&both))
+            .unwrap();
+
+        assert!(out.contains("name = \"api\"\nversion = \"2.0.0\""), "{out}");
+        assert!(out.contains("name = \"web\"\nversion = \"2.0.0\""), "{out}");
+        assert!(out.contains("version = \"1.0.28\""), "{out}");
+    }
+
+    #[test]
+    fn members_that_should_move_together_but_disagree_are_refused() {
+        // In the fixture the two members sit at different versions, so naming
+        // both means asking for one version from two answers.
+        let both = names(&["api", "web"]);
+        let err = Format::CargoLock
+            .read("Cargo.lock", WORKSPACE, LockScope::Named(&both))
+            .unwrap_err();
+
+        assert!(
+            matches!(err, VersionFileError::InconsistentLock { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_lock_naming_none_of_the_projects_packages_is_reported() {
+        let absent = names(&["nothing-here"]);
+        let err = Format::CargoLock
+            .read("Cargo.lock", WORKSPACE, LockScope::Named(&absent))
+            .unwrap_err();
+
+        let VersionFileError::MissingField { field, .. } = &err else {
+            panic!("got {err:?}");
+        };
+        assert!(field.contains("nothing-here"), "{field}");
+    }
+
+    #[test]
+    fn a_manifest_names_the_package_that_pairs_it_with_its_lock_entry() {
+        assert_eq!(
+            cargo_package_name("[package]\nname = \"api\"\nversion = \"1.0.0\"\n").as_deref(),
+            Some("api")
+        );
+        // A virtual workspace manifest declares no package of its own.
+        assert_eq!(
+            cargo_package_name("[workspace]\nmembers = [\"crates/*\"]\n"),
+            None
+        );
+    }
+
     #[test]
     fn a_workspace_lock_is_refused_rather_than_guessed_at() {
         // Two packages built from the repository, so the lock alone cannot say
         // which project a version belongs to.
         let src = LOCK.to_owned() + "\n[[package]]\nname = \"demo-cli\"\nversion = \"1.2.3\"\n";
 
-        let err = Format::CargoLock.read("Cargo.lock", &src).unwrap_err();
+        let err = Format::CargoLock
+            .read("Cargo.lock", &src, LockScope::Sole)
+            .unwrap_err();
         let VersionFileError::WorkspaceLock { members, .. } = &err else {
             panic!("expected a workspace refusal, got {err:?}");
         };
@@ -897,7 +1119,7 @@ dependencies = [
 
         assert!(
             Format::CargoLock
-                .write("Cargo.lock", &src, &v("2.0.0"))
+                .write("Cargo.lock", &src, &v("2.0.0"), LockScope::Sole)
                 .is_err()
         );
     }
@@ -912,7 +1134,11 @@ name = \"semver\"
 version = \"1.0.23\"
 source = \"registry+https://github.com/rust-lang/crates.io-index\"
 ";
-        assert!(Format::CargoLock.read("Cargo.lock", src).is_err());
+        assert!(
+            Format::CargoLock
+                .read("Cargo.lock", src, LockScope::Sole)
+                .is_err()
+        );
     }
 
     #[test]
@@ -933,7 +1159,7 @@ version = \"1.0.0\"
 version = \"1.0.100\"
 ";
         let out = Format::CargoToml
-            .write("Cargo.toml", src, &v("1.0.1"))
+            .write("Cargo.toml", src, &v("1.0.1"), LockScope::Sole)
             .unwrap();
 
         assert!(
@@ -946,21 +1172,25 @@ version = \"1.0.100\"
     #[test]
     fn cargo_workspace_inheritance_is_reported() {
         let src = "[package]\nname = \"app\"\nversion = { workspace = true }\n";
-        let err = Format::CargoToml.read("Cargo.toml", src).unwrap_err();
+        let err = Format::CargoToml
+            .read("Cargo.toml", src, LockScope::Sole)
+            .unwrap_err();
         assert!(matches!(err, VersionFileError::InheritedVersion { .. }));
     }
 
     #[test]
     fn cargo_without_a_package_table_is_reported() {
         let src = "[workspace]\nmembers = [\"a\"]\n";
-        let err = Format::CargoToml.read("Cargo.toml", src).unwrap_err();
+        let err = Format::CargoToml
+            .read("Cargo.toml", src, LockScope::Sole)
+            .unwrap_err();
         assert!(matches!(err, VersionFileError::MissingField { .. }));
     }
 
     #[test]
     fn malformed_toml_is_reported() {
         let err = Format::CargoToml
-            .read("Cargo.toml", "[package\nname =")
+            .read("Cargo.toml", "[package\nname =", LockScope::Sole)
             .unwrap_err();
         assert!(matches!(err, VersionFileError::Malformed { .. }));
     }
@@ -968,7 +1198,7 @@ version = \"1.0.100\"
     #[test]
     fn non_semver_contents_are_reported() {
         let err = Format::PlainText
-            .read("VERSION", "not-a-version")
+            .read("VERSION", "not-a-version", LockScope::Sole)
             .unwrap_err();
         assert!(matches!(err, VersionFileError::InvalidVersion { .. }));
     }
@@ -990,8 +1220,12 @@ version = \"1.0.100\"
         ];
         let next = v("2.3.4-rc.1");
         for (format, name, src) in cases {
-            let written = format.write(name, src, &next).unwrap();
-            assert_eq!(format.read(name, &written).unwrap(), next, "{name}");
+            let written = format.write(name, src, &next, LockScope::Sole).unwrap();
+            assert_eq!(
+                format.read(name, &written, LockScope::Sole).unwrap(),
+                next,
+                "{name}"
+            );
         }
     }
 }

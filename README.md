@@ -189,8 +189,34 @@ no network and no knowledge of the dependency graph.
 bump never invalidates them and they are not tracked.
 
 If a lock file records your version but is missing from `files`, vump stops
-before writing anything and names it. A Cargo workspace lock covering several
-crates is left alone — it records no single project's version.
+before writing anything and names it.
+
+### Cargo workspaces
+
+A workspace keeps one `Cargo.lock` at its root, holding an entry per member.
+Declare it alongside the manifests it covers, and each project writes only its
+own entries — matched by the package name its `Cargo.toml` declares.
+
+```toml
+[[project]]
+name = "api"
+files = ["crates/api/Cargo.toml", "Cargo.lock"]
+
+[[project]]
+name = "web"
+files = ["crates/web/Cargo.toml", "Cargo.lock"]
+```
+
+```bash
+$ vump minor --project api
+OK   1.0.0 -> 1.1.0
+  crates/api/Cargo.toml
+  Cargo.lock
+```
+
+Members held at one version work the same way with one project listing every
+manifest: they all move together. Members you do not declare are never
+touched.
 
 ## Version rules
 
