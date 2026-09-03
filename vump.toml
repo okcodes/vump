@@ -3,8 +3,11 @@
 # Cargo.toml is the single source of truth for this project's version: the
 # binary reads it at compile time via CARGO_PKG_VERSION, and CI verifies that
 # every released tag matches it before building or publishing anything.
+#
+# Cargo.lock records that version too, and release builds run --locked, so it
+# moves in the same commit rather than being left for a follow-up.
 
-files = ["Cargo.toml"]
+files = ["Cargo.toml", "Cargo.lock"]
 
 [git]
 commit = true
