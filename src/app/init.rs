@@ -11,7 +11,7 @@ use std::path::Path;
 use thiserror::Error;
 
 use crate::config::{DEFAULT_COMMIT_MESSAGE, DEFAULT_TAG_MESSAGE, DEFAULT_TAG_PATTERN, FILE_NAME};
-use crate::domain::version_file::Format;
+use crate::domain::version_file::{Format, LockScope};
 use crate::ports::{FileSystem, FsError};
 
 /// How deep beneath the starting directory to look.
@@ -71,6 +71,13 @@ pub fn discover(fs: &dyn FileSystem, root: &Path) -> Vec<String> {
         let depth = |p: &str| p.matches('/').count();
         depth(a).cmp(&depth(b)).then_with(|| a.cmp(b))
     });
+
+    // A lock file's entries are identified by the manifests declared with it,
+    // so every manifest has to be in hand before anything can be judged.
+    let names = crate::app::cargo_package_names(fs, root, found.iter().map(String::as_str));
+    let scope = crate::app::lock_scope(&names);
+
+    found.retain(|path| readable(fs, root, path, scope));
     found
 }
 
@@ -94,10 +101,7 @@ fn walk(fs: &dyn FileSystem, dir: &Path, prefix: &str, depth: usize, found: &mut
                 format!("{prefix}/{}", entry.name)
             };
             walk(fs, &dir.join(&entry.name), &child_prefix, depth + 1, found);
-        } else if let Some(format) = Format::detect(&entry.name) {
-            if !readable(fs, &dir.join(&entry.name), &entry.name, format) {
-                continue;
-            }
+        } else if Format::detect(&entry.name).is_some() {
             found.push(if prefix.is_empty() {
                 entry.name
             } else {
@@ -109,16 +113,22 @@ fn walk(fs: &dyn FileSystem, dir: &Path, prefix: &str, depth: usize, found: &mut
 
 /// Whether a discovered file carries a version vump could keep in step.
 ///
-/// Only lock files are examined. A workspace lock covers several packages and
-/// so records no single project version; declaring one would produce a
-/// configuration that fails on every command.
-fn readable(fs: &dyn FileSystem, path: &Path, name: &str, format: Format) -> bool {
-    if !format.is_lock() {
-        return true;
-    }
+/// A virtual workspace manifest declares no package, a private `package.json`
+/// often carries no version, and a lock file naming none of the packages found
+/// beside it belongs to something else. Declaring any of them would produce a
+/// configuration that fails on every command it is used for.
+fn readable(fs: &dyn FileSystem, root: &Path, declared: &str, scope: LockScope<'_>) -> bool {
+    let absolute = crate::app::resolve(root, declared);
+    let Some(format) = absolute
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(Format::detect)
+    else {
+        return false;
+    };
 
-    fs.read(path)
-        .is_ok_and(|contents| format.read(name, &contents).is_ok())
+    fs.read(&absolute)
+        .is_ok_and(|contents| format.read(declared, &contents, scope).is_ok())
 }
 
 /// Writes an initial configuration tracking every version file found.

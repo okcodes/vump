@@ -16,34 +16,24 @@ starting point, not a specification — expect it to change while building.
 
 ## Ready to build
 
-Ranked by value.
-
-### 1. Workspace lock files
-
-**Problem.** A lock covering several packages built from the repository records
-no single project's version, so vump neither writes it nor asks for it to be
-declared. A workspace member's bump therefore still leaves its lock stale —
-the bug that was just fixed, in a layout vump cannot currently resolve.
-
-**Why it matters.** `[[project]]` exists to serve monorepos, and a Cargo
-workspace is the most common Rust shape of one.
-
-**Shape.** The ambiguity is only in the lock file: the manifest names its
-package, so the right `[[package]]` entry is findable once the two are read
-together. That means resolving a lock against the manifest declared beside it,
-rather than in isolation — a change to `Format`'s signature, which currently
-takes only a filename and its contents and is pure because of it. Sibling
-crates that pin each other by version need their requirements bumped too, and
-that part may be worth refusing rather than building.
-
-npm workspaces record every member under `packages` in one root lock, and have
-the same ambiguity.
-
----
+Empty. Work arrives as an idea below and moves here once its problem is
+agreed, at which point it is ranked by value.
 
 ## Ideas, not yet decided
 
 Worth recording. None have an agreed problem statement yet.
+
+### npm workspaces
+
+A Cargo workspace's shared lock is now written per member, matched by the
+package name each manifest declares. `package-lock.json` has the same shape and
+not the same solution: its `packages` map is keyed by *path*
+(`"packages/api"`), not by package name, and a workspace member's version
+appears both there and in the member's own `package.json`.
+
+Undecided because no repository here needs it yet, and guessing at the mapping
+between a declared manifest path and a `packages` key is exactly the kind of
+inference that produced the original lock-file defect.
 
 ### Declarative version-file formats
 

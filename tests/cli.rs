@@ -914,19 +914,112 @@ fn a_yarn_lock_is_never_demanded() {
     assert_eq!(fx.run(&["patch", "--no-git"]).code, 0);
 }
 
+/// Cargo's own output for a two-member workspace, shared with the unit tests.
+const WORKSPACE_LOCK: &str = include_str!("../src/domain/testdata/cargo-workspace.lock");
+
+/// A workspace whose members are versioned independently, sharing one lock.
+fn workspace(files: &str) -> Fixture {
+    Fixture::new()
+        .write("vump.toml", files)
+        .write(
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"crates/*\"]\nresolver = \"3\"\n",
+        )
+        .write(
+            "crates/api/Cargo.toml",
+            "[package]\nname = \"api\"\nversion = \"1.0.0\"\n",
+        )
+        .write(
+            "crates/web/Cargo.toml",
+            "[package]\nname = \"web\"\nversion = \"2.5.0\"\n",
+        )
+        .write("Cargo.lock", WORKSPACE_LOCK)
+}
+
 #[test]
-fn a_workspace_lock_above_a_member_is_left_alone() {
-    // A known limit, recorded in BACKLOG.md: a workspace lock covers several
-    // packages, so it records no single project version. vump neither writes
-    // it nor demands it be declared, because it could not keep it in step.
-    let fx = Fixture::new()
-        .write("vump.toml", "files = [\"crates/api/Cargo.toml\"]\n")
-        .write("crates/api/Cargo.toml", &manifest("1.0.0"))
-        .write("Cargo.lock", "# workspace lock\n");
+fn a_workspace_member_bumps_only_its_own_entry_in_the_shared_lock() {
+    let fx = workspace("files = [\"crates/api/Cargo.toml\", \"Cargo.lock\"]\n");
+
+    let run = fx.run(&["minor", "--no-git"]);
+    assert_eq!(run.code, 0, "{}", run.output());
+
+    let lock = fx.read("Cargo.lock");
+    assert!(
+        lock.contains("name = \"api\"\nversion = \"1.1.0\""),
+        "{lock}"
+    );
+    // The sibling member is another project's business.
+    assert!(
+        lock.contains("name = \"web\"\nversion = \"2.5.0\""),
+        "{lock}"
+    );
+    assert!(lock.contains("version = \"1.0.28\""), "{lock}");
+}
+
+#[test]
+fn each_project_bumps_its_own_member_of_a_shared_lock() {
+    let fx = workspace(
+        "[[project]]\nname = \"api\"\nfiles = [\"crates/api/Cargo.toml\", \"Cargo.lock\"]\n\n\
+         [[project]]\nname = \"web\"\nfiles = [\"crates/web/Cargo.toml\", \"Cargo.lock\"]\n",
+    );
+
+    assert_eq!(fx.run(&["patch", "--project", "web", "--no-git"]).code, 0);
+
+    let lock = fx.read("Cargo.lock");
+    assert!(
+        lock.contains("name = \"web\"\nversion = \"2.5.1\""),
+        "{lock}"
+    );
+    assert!(
+        lock.contains("name = \"api\"\nversion = \"1.0.0\""),
+        "{lock}"
+    );
+}
+
+#[test]
+fn an_undeclared_workspace_lock_stops_the_run() {
+    // The lock sits at the workspace root, directories above the manifest.
+    let fx = workspace("files = [\"crates/api/Cargo.toml\"]\n");
 
     let run = fx.run(&["patch", "--no-git"]);
-    assert_eq!(run.code, 0, "{}", run.output());
-    assert_eq!(fx.read("Cargo.lock"), "# workspace lock\n");
+    assert_eq!(run.code, 3, "{}", run.output());
+    assert!(run.output().contains("Cargo.lock"), "{}", run.output());
+    assert!(fx.read("crates/api/Cargo.toml").contains("1.0.0"));
+}
+
+#[test]
+fn init_skips_files_it_could_not_keep_in_step() {
+    // Members held at one version, which is the shape init can describe: a
+    // single project tracking every manifest and the lock they share.
+    let fx = Fixture::new()
+        .write(
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"crates/*\"]\nresolver = \"3\"\n",
+        )
+        .write(
+            "crates/api/Cargo.toml",
+            "[package]\nname = \"api\"\nversion = \"1.0.0\"\n",
+        )
+        .write(
+            "crates/web/Cargo.toml",
+            "[package]\nname = \"web\"\nversion = \"1.0.0\"\n",
+        )
+        .write(
+            "Cargo.lock",
+            &WORKSPACE_LOCK.replace("version = \"2.5.0\"", "version = \"1.0.0\""),
+        );
+
+    assert_eq!(fx.run(&["init"]).code, 0);
+    let config = fx.read("vump.toml");
+
+    // The virtual workspace manifest declares no version of its own, so
+    // tracking it would produce a configuration that fails on every command.
+    assert!(!config.contains("\n    \"Cargo.toml\""), "{config}");
+    assert!(config.contains("crates/api/Cargo.toml"), "{config}");
+    assert!(config.contains("Cargo.lock"), "{config}");
+
+    // And the configuration it wrote works.
+    assert_eq!(fx.run(&["check", "1.0.0"]).code, 0);
 }
 
 #[test]

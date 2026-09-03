@@ -7,3 +7,7 @@ Regenerate with:
     npm install --package-lock-only --lockfile-version=<1|2|3>
 
 against a package.json declaring `"version": "1.2.3"` and one dependency.
+
+`cargo-workspace.lock` is Cargo's output for a two-member workspace whose
+members hold different versions, alongside one fetched dependency. Regenerate
+with `cargo generate-lockfile`.
