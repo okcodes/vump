@@ -1,0 +1,11 @@
+# One npm package, versioned on its own.
+#
+# Git is off throughout the sandbox. These projects have no repository of their
+# own — they sit inside vump's — so a commit or tag made here would land in it.
+
+files = ["package.json", "package-lock.json"]
+
+[git]
+commit = false
+tag = false
+push = false

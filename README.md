@@ -154,7 +154,7 @@ order, indentation, and comments elsewhere in the file survive untouched.
 | Filename | Version location |
 | --- | --- |
 | `package.json` | top-level `version` |
-| `*.csproj` | `<Version>` in a `<PropertyGroup>` |
+| `*.csproj`, `*.fsproj`, `*.vbproj` | `<Version>` in a `<PropertyGroup>` |
 | `package-lock.json` | top-level `version`, and the root `packages` entry |
 | `Cargo.toml` | `[package].version` |
 | `Cargo.lock` | the `[[package]]` entry for this crate |
@@ -386,6 +386,10 @@ cargo test
 ```
 
 CI runs the same three on Linux, macOS and Windows.
+
+[`sandbox/`](sandbox) holds working projects — npm and C#, single- and
+multi-project — to run vump against by hand and to read as configuration
+examples. Git is off in all of them, because they share this repository.
 
 | Document | Holds |
 | --- | --- |

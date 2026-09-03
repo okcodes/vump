@@ -1161,3 +1161,35 @@ fn init_finds_a_csproj_and_skips_one_with_no_version() {
     // A project that declares no version cannot be kept in step with one.
     assert!(!config.contains("Tools.csproj"), "{config}");
 }
+
+// ─── Sandbox ─────────────────────────────────────────────────────────────────
+
+#[test]
+fn the_sandbox_projects_stay_usable() {
+    // The sandbox is committed as worked examples, so it must not be allowed to
+    // drift into demonstrating something that no longer holds. `status`
+    // succeeds only when every tracked file of every project agrees, which is
+    // also true after a bump — so experimenting there does not fail this.
+    let sandbox = Path::new(env!("CARGO_MANIFEST_DIR")).join("sandbox");
+
+    for project in [
+        "npm/single-project",
+        "npm/multi-project",
+        "cs/single-project",
+        "cs/multi-project",
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_vump"))
+            .arg("status")
+            .current_dir(sandbox.join(project))
+            .stdin(Stdio::null())
+            .output()
+            .expect("cannot run vump");
+
+        assert!(
+            output.status.success(),
+            "{project}: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+}

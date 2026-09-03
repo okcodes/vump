@@ -6,3 +6,9 @@ dist/
 
 # Personal, machine-local agent settings
 .claude/settings.local.json
+
+# Sandbox build output. The projects are committed; what building them
+# produces is not.
+sandbox/**/bin/
+sandbox/**/obj/
+sandbox/**/node_modules/

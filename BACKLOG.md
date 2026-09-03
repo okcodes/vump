@@ -23,16 +23,34 @@ agreed, at which point it is ranked by value.
 
 Worth recording. None have an agreed problem statement yet.
 
-### Other MSBuild project files, and a shared version
+### A shared version for a .NET solution
 
-`*.csproj` is tracked. `*.fsproj` and `*.vbproj` are the same format with a
-different extension, and `Directory.Build.props` is where a solution with many
-projects usually keeps one shared `<Version>`.
+`Directory.Build.props` is where a solution with many projects usually keeps
+one `<Version>`, inherited by every project beneath it. Reading it needs no new
+code — it is the same `MSBuild` XML.
 
-The first two are a one-line change and are left out only because nothing here
-uses F# or VB. The props file is not: it governs every project beneath it, so
-tracking it means deciding what happens when a project also declares its own
-version, and that needs a real solution in hand.
+What is undecided is what happens when a project underneath also declares its
+own `<Version>`, which overrides the inherited one. Tracking both would mean
+vump writing two files that disagree by design. Needs a real solution in hand
+rather than a guess at which layer wins.
+
+### Deriving the version from git tags instead of files
+
+Tools like MinVer compute a .NET package version from the nearest git tag, so
+no file records it and nothing can fall out of sync.
+
+Not adopted, and not a competitor so much as the opposite trade. It needs git
+history at build time, which shallow CI checkouts and source tarballs do not
+have; it leaves a checked-out tree with no readable version; and it does not
+reach npm or Cargo, whose manifests must carry a version regardless — so a
+polyglot repository would need both models at once. Most of all it removes the
+second opinion: a mistyped tag becomes a correctly-built wrong version, with
+nothing left to check it against, which is the failure `vump check` exists to
+catch.
+
+Worth revisiting only for a repository that is .NET alone and does not publish
+source archives. `vump set "$(git describe --tags --abbrev=0)"` already covers
+deriving a version from a tag for anyone who wants that direction.
 
 ### Python projects
 

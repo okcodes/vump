@@ -1,0 +1,10 @@
+{
+  "name": "vump-sandbox-npm",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Single-project npm sandbox for vump",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  }
+}

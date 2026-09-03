@@ -75,13 +75,14 @@ command with a hidden fork.
 ### Version files
 
 A version file is any file that records the project's version. Detection is by
-filename, and `*.csproj` is the one match on an extension rather than a whole
-name — a C# project is named after its assembly.
+filename, and the `MSBuild` project files are the only match on an extension
+rather than a whole name — a .NET project is named after the assembly it
+builds. The three extensions are one language each and one format.
 
 | Filename            | Format     | Location of the version                 |
 | ------------------- | ---------- | --------------------------------------- |
 | `package.json`      | JSON       | `.version`                              |
-| `*.csproj`          | XML        | `<Project><PropertyGroup><Version>`     |
+| `*.csproj`, `*.fsproj`, `*.vbproj` | XML | `<Project><PropertyGroup><Version>` |
 | `package-lock.json` | JSON       | `.version`, and `.packages[""].version` |
 | `Cargo.toml`        | TOML       | `[package].version`                     |
 | `Cargo.lock`        | TOML       | the sole `[[package]]` with no `source` |

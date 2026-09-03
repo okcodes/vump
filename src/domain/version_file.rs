@@ -23,8 +23,9 @@ pub enum Format {
     PackageJson,
     /// Cargo manifest; the version lives at `[package].version`.
     CargoToml,
-    /// `MSBuild` project; the version lives at `<Project><PropertyGroup><Version>`.
-    CsProj,
+    /// `MSBuild` project — `.csproj`, `.fsproj` or `.vbproj`; the version
+    /// lives at `<Project><PropertyGroup><Version>`.
+    MsBuild,
     /// A file whose entire contents are the version.
     PlainText,
 }
@@ -65,9 +66,14 @@ impl Tracked {
             "package.json" => Some(Self::Manifest(Format::PackageJson)),
             "Cargo.toml" => Some(Self::Manifest(Format::CargoToml)),
             "VERSION" => Some(Self::Manifest(Format::PlainText)),
-            // The only recognized name that is an extension rather than a
-            // whole filename: a C# project is named after its assembly.
-            _ if has_extension(file_name, "csproj") => Some(Self::Manifest(Format::CsProj)),
+            // The only names recognized by extension rather than in full: an
+            // MSBuild project is named after the assembly it builds.
+            _ if MSBUILD_PROJECT_EXTENSIONS
+                .iter()
+                .any(|ext| has_extension(file_name, ext)) =>
+            {
+                Some(Self::Manifest(Format::MsBuild))
+            }
             "Cargo.lock" => Some(Self::Lock(LockFile::Cargo)),
             "package-lock.json" => Some(Self::Lock(LockFile::Npm)),
             _ => None,
@@ -177,7 +183,7 @@ impl Format {
         match self {
             Self::PackageJson => "JSON",
             Self::CargoToml => "TOML",
-            Self::CsProj => "XML",
+            Self::MsBuild => "XML",
             Self::PlainText => "plain text",
         }
     }
@@ -188,7 +194,7 @@ impl Format {
         match self {
             Self::PackageJson => "\"version\"",
             Self::CargoToml => "[package].version",
-            Self::CsProj => "<Version>",
+            Self::MsBuild => "<Version>",
             Self::PlainText => "version",
         }
     }
@@ -213,7 +219,7 @@ impl Format {
                 contents[span].to_owned()
             }
             Self::CargoToml => read_cargo_version(file, contents)?,
-            Self::CsProj => match find_csproj_version(file, contents)? {
+            Self::MsBuild => match find_msbuild_version(file, contents)? {
                 Some(span) => contents[span].to_owned(),
                 None => String::new(),
             },
@@ -249,8 +255,8 @@ impl Format {
                 Ok(splice(contents, &[span], version))
             }
             Self::CargoToml => write_cargo_version(file, contents, version),
-            Self::CsProj => {
-                let span = find_csproj_version(file, contents)?.ok_or_else(|| {
+            Self::MsBuild => {
+                let span = find_msbuild_version(file, contents)?.ok_or_else(|| {
                     VersionFileError::MissingField {
                         file: file.to_owned(),
                         field: self.field_description().to_owned(),
@@ -349,6 +355,10 @@ fn splice(contents: &str, spans: &[Range<usize>], version: &Version) -> String {
     out
 }
 
+/// Project file extensions, one per .NET language. All three are the same
+/// `MSBuild` XML and record the version identically.
+const MSBUILD_PROJECT_EXTENSIONS: [&str; 3] = ["csproj", "fsproj", "vbproj"];
+
 /// Whether `file_name` ends in `.<extension>`, ignoring case.
 ///
 /// Windows filesystems are case-insensitive, so a project checked out there and
@@ -373,7 +383,7 @@ fn has_extension(file_name: &str, extension: &str) -> bool {
 /// Returns [`VersionFileError::AmbiguousField`] when several property groups
 /// declare a version, since they are alternatives and vump cannot tell which
 /// condition will hold.
-fn find_csproj_version(
+fn find_msbuild_version(
     file: &str,
     contents: &str,
 ) -> Result<Option<Range<usize>>, VersionFileError> {
@@ -1030,14 +1040,14 @@ serde = \"1\"
     #[test]
     fn reads_the_version_property_of_a_project_file() {
         assert_eq!(
-            Format::CsProj.read("Demo.csproj", CSPROJ).unwrap(),
+            Format::MsBuild.read("Demo.csproj", CSPROJ).unwrap(),
             v("1.2.3")
         );
     }
 
     #[test]
     fn csproj_ignores_every_other_version_in_the_file() {
-        let out = Format::CsProj
+        let out = Format::MsBuild
             .write("Demo.csproj", CSPROJ, &v("2.0.0-rc.1"))
             .unwrap();
 
@@ -1053,7 +1063,7 @@ serde = \"1\"
 
     #[test]
     fn csproj_preserves_the_byte_order_mark_and_everything_else() {
-        let out = Format::CsProj
+        let out = Format::MsBuild
             .write("Demo.csproj", CSPROJ, &v("2.0.0"))
             .unwrap();
 
@@ -1065,18 +1075,24 @@ serde = \"1\"
 
     #[test]
     fn a_project_file_is_recognized_by_its_extension() {
-        // The only recognized name that is an extension: a C# project is named
-        // after its assembly.
-        for name in ["Demo.csproj", "Some.Long.Name.csproj", "Demo.CSPROJ"] {
+        // The only names recognized by extension: an MSBuild project is named
+        // after the assembly it builds, in any of the .NET languages.
+        for name in [
+            "Demo.csproj",
+            "Some.Long.Name.csproj",
+            "Demo.CSPROJ",
+            "Demo.fsproj",
+            "Demo.vbproj",
+        ] {
             assert_eq!(
                 Tracked::detect(name),
-                Some(Tracked::Manifest(Format::CsProj)),
+                Some(Tracked::Manifest(Format::MsBuild)),
                 "{name}"
             );
         }
         assert_eq!(Tracked::detect("csproj"), None);
         assert_eq!(Tracked::detect(".csproj"), None);
-        assert_eq!(Tracked::detect("Demo.fsproj"), None);
+        assert_eq!(Tracked::detect("Demo.sln"), None);
     }
 
     #[test]
@@ -1087,7 +1103,10 @@ serde = \"1\"
                    <PropertyGroup><Version>1.0.0</Version></PropertyGroup>\n\
                    </Project>\n";
 
-        assert_eq!(Format::CsProj.read("Demo.csproj", src).unwrap(), v("1.0.0"));
+        assert_eq!(
+            Format::MsBuild.read("Demo.csproj", src).unwrap(),
+            v("1.0.0")
+        );
     }
 
     #[test]
@@ -1098,7 +1117,7 @@ serde = \"1\"
                    <PropertyGroup><VersionPrefix>1.0.0</VersionPrefix></PropertyGroup>\n\
                    </Project>\n";
 
-        let err = Format::CsProj.read("Demo.csproj", src).unwrap_err();
+        let err = Format::MsBuild.read("Demo.csproj", src).unwrap_err();
         let VersionFileError::MissingField { field, .. } = &err else {
             panic!("got {err:?}");
         };
@@ -1114,7 +1133,7 @@ serde = \"1\"
                    <PropertyGroup><Version>2.0.0</Version></PropertyGroup>\n\
                    </Project>\n";
 
-        let err = Format::CsProj.read("Demo.csproj", src).unwrap_err();
+        let err = Format::MsBuild.read("Demo.csproj", src).unwrap_err();
         assert!(
             matches!(err, VersionFileError::AmbiguousField { .. }),
             "got {err:?}"
