@@ -315,12 +315,16 @@ version.
 ## Development
 
 ```bash
-cargo test
-cargo clippy --all-targets -- -D warnings
 cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
 ```
 
-[`DESIGN.md`](DESIGN.md) records the intended behavior and architecture, and is
-the authority when the code and your expectations disagree.
-[`BACKLOG.md`](BACKLOG.md) records what is not built yet, and what was decided
-against.
+CI runs the same three on Linux, macOS and Windows.
+
+| Document | Holds |
+| --- | --- |
+| [`DESIGN.md`](DESIGN.md) | Intended behavior and architecture. The authority when the code and your expectations disagree. |
+| [`ENGINEERING.md`](ENGINEERING.md) | How code is written and judged here, with the cases behind each rule |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | How work flows: branches, commits, pull requests, releases |
+| [`BACKLOG.md`](BACKLOG.md) | What is not built yet, and what was decided against |
