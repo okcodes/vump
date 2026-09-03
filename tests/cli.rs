@@ -69,6 +69,16 @@ impl Fixture {
             .collect()
     }
 
+    /// Paths git reports as changed, one per line.
+    fn porcelain(&self) -> String {
+        let out = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(self.dir.path())
+            .output()
+            .expect("cannot read git status");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
     fn git(&self, args: &[&str]) -> &Self {
         let status = Command::new("git")
             .args(args)
@@ -121,7 +131,6 @@ impl Run {
 }
 
 const SINGLE: &str = "files = [\"VERSION\"]\n";
-const SINGLE_PACKAGE: &str = "files = [\"package.json\"]\n";
 
 // ─── Exit codes ──────────────────────────────────────────────────────────────
 
@@ -359,56 +368,6 @@ fn no_git_overrides_configured_actions() {
     assert_eq!(fx.read("VERSION"), "1.2.4\n");
 
     assert!(fx.tags().is_empty());
-}
-
-#[test]
-fn a_bump_reports_lock_files_it_leaves_stale() {
-    // A stale Cargo.lock is not cosmetic: it fails a --locked build, which is
-    // what release pipelines run.
-    let fx = Fixture::new()
-        .write("vump.toml", "files = [\"crates/api/Cargo.toml\"]\n")
-        .write("crates/api/Cargo.toml", "[package]\nversion = \"1.0.0\"\n")
-        .write("Cargo.lock", "# workspace lock\n");
-
-    let run = fx.run(&["patch", "--no-git"]);
-    assert_eq!(run.code, 0, "{}", run.output());
-    assert!(run.stdout.contains("Cargo.lock"), "{}", run.stdout);
-    assert!(run.stdout.contains("cargo check"), "{}", run.stdout);
-
-    // The lock itself is never rewritten; vump does not run package managers.
-    assert_eq!(fx.read("Cargo.lock"), "# workspace lock\n");
-}
-
-#[test]
-fn stale_locks_appear_in_json_output() {
-    let fx = Fixture::new()
-        .write("vump.toml", SINGLE_PACKAGE)
-        .write("package.json", "{\"version\":\"1.0.0\"}")
-        .write("package-lock.json", "{}");
-
-    let value = fx.run(&["patch", "--no-git", "--json"]).json();
-    let locks = value["stale_locks"]
-        .as_array()
-        .expect("stale_locks must be an array");
-
-    assert_eq!(locks.len(), 1);
-    assert_eq!(locks[0]["path"], "package-lock.json");
-    assert_eq!(locks[0]["refresh_with"], "npm install");
-}
-
-#[test]
-fn a_bump_with_no_lock_files_reports_none() {
-    let fx = Fixture::new()
-        .write("vump.toml", SINGLE)
-        .write("VERSION", "1.0.0\n");
-
-    let value = fx.run(&["patch", "--no-git", "--json"]).json();
-    assert!(
-        value["stale_locks"]
-            .as_array()
-            .expect("stale_locks must be present")
-            .is_empty()
-    );
 }
 
 // ─── Setting an exact version ────────────────────────────────────────────────
@@ -757,4 +716,135 @@ fn failures_are_reported_as_json_too() {
     // The error kind mirrors the exit code, so a caller can branch on either.
     assert_eq!(value["error"]["kind"], "config");
     assert_eq!(run.code, 3);
+}
+
+// ─── Lock files ──────────────────────────────────────────────────────────────
+
+const CARGO_PROJECT: &str = "files = [\"Cargo.toml\", \"Cargo.lock\"]\n";
+
+fn manifest(version: &str) -> String {
+    format!("[package]\nname = \"demo\"\nversion = \"{version}\"\n")
+}
+
+/// A lock as Cargo writes one: a fetched dependency, then the local package.
+fn lock(version: &str) -> String {
+    format!(
+        "version = 4\n\n\
+         [[package]]\nname = \"dep\"\nversion = \"1.0.0\"\n\
+         source = \"registry+https://github.com/rust-lang/crates.io-index\"\n\n\
+         [[package]]\nname = \"demo\"\nversion = \"{version}\"\n"
+    )
+}
+
+#[test]
+fn a_bump_moves_the_lock_file_in_the_same_commit() {
+    let fx = Fixture::new()
+        .write("vump.toml", CARGO_PROJECT)
+        .write("Cargo.toml", &manifest("1.2.3"))
+        .write("Cargo.lock", &lock("1.2.3"))
+        .with_git();
+
+    let run = fx.run(&["patch", "--tag"]);
+    assert_eq!(run.code, 0, "{}", run.output());
+
+    assert!(fx.read("Cargo.toml").contains("version = \"1.2.4\""));
+    assert!(
+        fx.read("Cargo.lock")
+            .contains("name = \"demo\"\nversion = \"1.2.4\"")
+    );
+    assert_eq!(fx.tags(), ["v1.2.4"]);
+
+    // Nothing is left behind for the user to finish: this is the whole point.
+    // A tag pointing at a tree whose lock still holds the old version is what
+    // `cargo build --locked` rejects, after the tag is already public.
+    assert_eq!(fx.porcelain(), "", "the bump left work undone");
+}
+
+#[test]
+fn a_bump_leaves_dependency_versions_in_the_lock_alone() {
+    let fx = Fixture::new()
+        .write("vump.toml", CARGO_PROJECT)
+        .write("Cargo.toml", &manifest("1.2.3"))
+        .write("Cargo.lock", &lock("1.2.3"));
+
+    assert_eq!(fx.run(&["minor", "--no-git"]).code, 0);
+    assert!(
+        fx.read("Cargo.lock")
+            .contains("name = \"dep\"\nversion = \"1.0.0\"")
+    );
+}
+
+#[test]
+fn an_undeclared_lock_stops_the_run_before_anything_happens() {
+    let fx = Fixture::new()
+        .write("vump.toml", "files = [\"Cargo.toml\"]\n")
+        .write("Cargo.toml", &manifest("1.2.3"))
+        .write("Cargo.lock", &lock("1.2.3"))
+        .with_git();
+
+    let run = fx.run(&["patch", "--tag"]);
+
+    assert_eq!(run.code, 3, "{}", run.output());
+    assert!(run.output().contains("Cargo.lock"), "{}", run.output());
+
+    // Refused at planning time, so there is no commit or tag to undo.
+    assert!(fx.read("Cargo.toml").contains("1.2.3"));
+    assert!(fx.tags().is_empty());
+    assert_eq!(fx.porcelain(), "");
+}
+
+#[test]
+fn check_verifies_the_lock_file_too() {
+    // The safety net in CI: a tag matching the manifest but not the lock
+    // describes a tree that cannot be built from it.
+    let fx = Fixture::new()
+        .write("vump.toml", CARGO_PROJECT)
+        .write("Cargo.toml", &manifest("1.2.3"))
+        .write("Cargo.lock", &lock("1.2.2"));
+
+    let run = fx.run(&["check", "1.2.3"]);
+    assert_ne!(run.code, 0, "{}", run.output());
+    assert!(run.output().contains("Cargo.lock"), "{}", run.output());
+}
+
+#[test]
+fn set_repairs_a_manifest_and_lock_that_disagree() {
+    let fx = Fixture::new()
+        .write("vump.toml", CARGO_PROJECT)
+        .write("Cargo.toml", &manifest("1.2.3"))
+        .write("Cargo.lock", &lock("1.2.2"));
+
+    assert_eq!(fx.run(&["set", "1.2.3", "--no-git"]).code, 0);
+    assert!(
+        fx.read("Cargo.lock")
+            .contains("name = \"demo\"\nversion = \"1.2.3\"")
+    );
+    assert_eq!(fx.run(&["check", "1.2.3"]).code, 0);
+}
+
+#[test]
+fn a_workspace_lock_above_a_member_is_left_alone() {
+    // A known limit, recorded in BACKLOG.md: a workspace lock covers several
+    // packages, so it records no single project version. vump neither writes
+    // it nor demands it be declared, because it could not keep it in step.
+    let fx = Fixture::new()
+        .write("vump.toml", "files = [\"crates/api/Cargo.toml\"]\n")
+        .write("crates/api/Cargo.toml", &manifest("1.0.0"))
+        .write("Cargo.lock", "# workspace lock\n");
+
+    let run = fx.run(&["patch", "--no-git"]);
+    assert_eq!(run.code, 0, "{}", run.output());
+    assert_eq!(fx.read("Cargo.lock"), "# workspace lock\n");
+}
+
+#[test]
+fn init_declares_the_lock_beside_the_manifest() {
+    let fx = Fixture::new()
+        .write("Cargo.toml", &manifest("1.2.3"))
+        .write("Cargo.lock", &lock("1.2.3"));
+
+    assert_eq!(fx.run(&["init"]).code, 0);
+    let config = fx.read("vump.toml");
+    assert!(config.contains("Cargo.toml"), "{config}");
+    assert!(config.contains("Cargo.lock"), "{config}");
 }

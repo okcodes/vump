@@ -148,10 +148,41 @@ order, indentation, and comments elsewhere in the file survive untouched.
 | --- | --- |
 | `package.json` | top-level `version` |
 | `Cargo.toml` | `[package].version` |
+| `Cargo.lock` | the `[[package]]` entry for this crate |
 | `VERSION` | the whole file |
 
 A `version` nested under `dependencies` is never mistaken for the project's
-own.
+own, and neither is a locked dependency's.
+
+### Lock files move with the manifest
+
+`Cargo.lock` records this crate's own version, and `cargo build --locked`
+rejects a tree where it and `Cargo.toml` disagree. So vump writes it in the
+same run:
+
+```bash
+$ vump patch --tag
+OK   0.2.0 -> 0.2.1
+  Cargo.toml
+  Cargo.lock
+```
+
+Nothing is left to finish afterwards. A tag that ships before the lock catches
+up describes a tree that cannot be built from it — and by then the fix costs a
+deleted tag and a redone release.
+
+This is not vump running a package manager, which it never does. Resolving
+dependencies means reading requirements, contacting a registry and computing a
+tree; writing back a version vump just wrote is the same in-place edit it
+performs on the manifest. The test is whether the result can be computed with
+no network and no knowledge of the dependency graph.
+
+`yarn.lock` and `pnpm-lock.yaml` hold no version for the project itself, so a
+bump never invalidates them and they are not tracked.
+
+If a lock file records your version but is missing from `files`, vump stops
+before writing anything and names it. A workspace lock covering several crates
+is left alone — it records no single project's version.
 
 ## Version rules
 
@@ -301,16 +332,11 @@ version.
   written.
 - Only files declared in configuration are staged, so unrelated work cannot
   ride along in a version-bump commit.
-- vump never runs a package manager. When a bump leaves a lock file recording
-  the old version, it says so and names the command that refreshes it:
-
-  ```
-  1 lock file is now out of date:
-    Cargo.lock  ->  cargo check
-  ```
-
-  This matters beyond tidiness — a stale `Cargo.lock` fails `cargo build
-  --locked`, which is what release pipelines run.
+- Everything knowable before writing is checked before writing, so a run that
+  cannot finish cleanly does nothing at all — there is no half-applied state to
+  unwind. Where that is impossible, as with a push failing after the commit and
+  tag succeeded, what did happen is reported exactly.
+- vump never runs a package manager, and never resolves dependencies.
 
 ## Development
 

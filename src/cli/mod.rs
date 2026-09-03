@@ -509,8 +509,7 @@ fn interactive(ctx: &Context) -> Result<Exit, CliError> {
 
     let vcs = GitCli::new(&ctx.root);
     let outcome = app::change::apply(&ctx.fs, &vcs, &ctx.root, &plan.changes)?;
-    let stale = app::lockfile::detect(&ctx.fs, &ctx.root, &outcome.written);
-    render::applied(&plan.changes, &outcome, &stale, ctx.json);
+    render::applied(&plan.changes, &outcome, ctx.json);
 
     Ok(if outcome.push_error.is_some() {
         Exit::Git
@@ -636,8 +635,7 @@ fn bump(
 
     let vcs = GitCli::new(&ctx.root);
     let outcome = app::change::apply(&ctx.fs, &vcs, &ctx.root, &plan.changes)?;
-    let stale = app::lockfile::detect(&ctx.fs, &ctx.root, &outcome.written);
-    render::applied(&plan.changes, &outcome, &stale, ctx.json);
+    render::applied(&plan.changes, &outcome, ctx.json);
 
     // A failed push leaves real, recoverable work behind, so it is reported as
     // a git failure rather than as a successful run.
@@ -692,8 +690,7 @@ fn set(ctx: &Context, version: &str, dry_run: bool, git_args: &GitArgs) -> Resul
 
     let vcs = GitCli::new(&ctx.root);
     let outcome = app::change::apply(&ctx.fs, &vcs, &ctx.root, &changes)?;
-    let stale = app::lockfile::detect(&ctx.fs, &ctx.root, &outcome.written);
-    render::applied(&changes, &outcome, &stale, ctx.json);
+    render::applied(&changes, &outcome, ctx.json);
 
     Ok(if outcome.push_error.is_some() {
         Exit::Git
@@ -788,7 +785,8 @@ fn app_exit(error: &AppError) -> Exit {
         AppError::Filesystem(FsError::Io { .. }) => Exit::Failure,
         AppError::MissingFile { .. }
         | AppError::Filesystem(FsError::NotFound { .. })
-        | AppError::VersionFile(_) => Exit::Config,
+        | AppError::VersionFile(_)
+        | AppError::UndeclaredLock { .. } => Exit::Config,
     }
 }
 

@@ -8,7 +8,6 @@ pub mod bump;
 pub mod change;
 pub mod check;
 pub mod init;
-pub mod lockfile;
 pub mod set;
 pub mod status;
 pub mod update;
@@ -48,6 +47,19 @@ pub enum AppError {
     /// A declared file could not be interpreted.
     #[error("{0}")]
     VersionFile(#[from] VersionFileError),
+
+    /// A lock file records this project's version but is not tracked.
+    #[error(
+        "{lock} records this project's version but is not declared in {config}; \
+         add it to files, or writing {manifest} will leave the two disagreeing",
+        config = crate::config::FILE_NAME
+    )]
+    UndeclaredLock {
+        /// The lock file found next to a declared manifest.
+        lock: String,
+        /// The manifest it belongs to.
+        manifest: String,
+    },
 }
 
 /// Reads the version recorded in every file of `project`.
@@ -90,7 +102,71 @@ pub fn read_project_versions(
         });
     }
 
+    check_declared_locks(fs, root, project)?;
+
     Ok(versions)
+}
+
+/// Refuses a lock file that records this project's version but is not declared.
+///
+/// Writing a manifest without its lock leaves the two disagreeing, and
+/// `cargo build --locked` rejects that outright — so a tag would be published
+/// for a tree that cannot be built from it. Catching it here means the refusal
+/// arrives before anything is written, rather than as advice after a commit and
+/// tag already exist.
+///
+/// A lock vump cannot write is passed over rather than demanded: a workspace
+/// lock covers several packages, and asking for it to be declared would only
+/// produce a second refusal.
+fn check_declared_locks(
+    fs: &dyn FileSystem,
+    root: &Path,
+    project: &Project,
+) -> Result<(), AppError> {
+    for declared in &project.files {
+        let Some(lock) = companion_lock(declared) else {
+            continue;
+        };
+        if project.files.contains(&lock) {
+            continue;
+        }
+
+        let absolute = resolve(root, &lock);
+        if !fs.is_file(&absolute) {
+            continue;
+        }
+
+        // Reading it decides whether it is one vump could keep in step.
+        let contents = fs.read(&absolute)?;
+        if Format::CargoLock.read(&lock, &contents).is_ok() {
+            return Err(AppError::UndeclaredLock {
+                lock,
+                manifest: declared.clone(),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+/// Names the lock file that sits beside `declared` and records its version.
+///
+/// Only Cargo is covered: a `yarn.lock` or `pnpm-lock.yaml` carries no version
+/// for the project itself, so a bump never invalidates one.
+fn companion_lock(declared: &str) -> Option<String> {
+    let (directory, name) = declared
+        .rsplit_once('/')
+        .map_or(("", declared), |(dir, name)| (dir, name));
+
+    if name != "Cargo.toml" {
+        return None;
+    }
+
+    Some(if directory.is_empty() {
+        "Cargo.lock".to_owned()
+    } else {
+        format!("{directory}/Cargo.lock")
+    })
 }
 
 /// Resolves a configured path against the configuration's directory.
@@ -154,6 +230,88 @@ mod tests {
             err,
             AppError::VersionFile(VersionFileError::UnsupportedFile { .. })
         ));
+    }
+
+    /// A lock naming each of `members` as built from this repository.
+    fn lock(members: &[&str]) -> String {
+        let mut out = String::from(
+            "version = 4\n\n\
+             [[package]]\nname = \"semver\"\nversion = \"1.0.23\"\n\
+             source = \"registry+https://github.com/rust-lang/crates.io-index\"\n",
+        );
+        for name in members {
+            out.push_str("\n[[package]]\nname = \"");
+            out.push_str(name);
+            out.push_str("\"\nversion = \"1.2.3\"\n");
+        }
+        out
+    }
+
+    #[test]
+    fn a_lock_recording_this_version_must_be_declared() {
+        // Writing the manifest without it leaves `cargo build --locked` failing
+        // on a tree a tag already claims is correct.
+        let fs = MemoryFileSystem::new()
+            .with_file("/repo/Cargo.toml", "[package]\nversion = \"1.2.3\"\n")
+            .with_file("/repo/Cargo.lock", lock(&["demo"]));
+
+        let err =
+            read_project_versions(&fs, Path::new("/repo"), &project(&["Cargo.toml"])).unwrap_err();
+
+        assert!(
+            matches!(err, AppError::UndeclaredLock { ref lock, .. } if lock == "Cargo.lock"),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_declared_lock_is_read_like_any_other_file() {
+        let fs = MemoryFileSystem::new()
+            .with_file("/repo/Cargo.toml", "[package]\nversion = \"1.2.3\"\n")
+            .with_file("/repo/Cargo.lock", lock(&["demo"]));
+
+        let versions = read_project_versions(
+            &fs,
+            Path::new("/repo"),
+            &project(&["Cargo.toml", "Cargo.lock"]),
+        )
+        .unwrap();
+
+        assert_eq!(versions.len(), 2);
+        assert_eq!(versions[1].path, "Cargo.lock");
+        assert_eq!(versions[1].version, "1.2.3".parse().unwrap());
+    }
+
+    #[test]
+    fn a_lock_vump_cannot_write_is_not_demanded() {
+        // A workspace lock records no single project version, so asking for it
+        // to be declared would only produce a second refusal.
+        let fs = MemoryFileSystem::new()
+            .with_file("/repo/Cargo.toml", "[package]\nversion = \"1.2.3\"\n")
+            .with_file("/repo/Cargo.lock", lock(&["demo", "demo-cli"]));
+
+        assert!(read_project_versions(&fs, Path::new("/repo"), &project(&["Cargo.toml"])).is_ok());
+    }
+
+    #[test]
+    fn a_manifest_with_no_lock_beside_it_is_fine() {
+        let fs = MemoryFileSystem::new()
+            .with_file("/repo/Cargo.toml", "[package]\nversion = \"1.2.3\"\n");
+
+        assert!(read_project_versions(&fs, Path::new("/repo"), &project(&["Cargo.toml"])).is_ok());
+    }
+
+    #[test]
+    fn only_cargo_manifests_have_a_companion_lock() {
+        // yarn and pnpm locks carry no version for the project itself, so a
+        // bump never invalidates one.
+        assert_eq!(companion_lock("Cargo.toml").as_deref(), Some("Cargo.lock"));
+        assert_eq!(
+            companion_lock("crates/api/Cargo.toml").as_deref(),
+            Some("crates/api/Cargo.lock")
+        );
+        assert_eq!(companion_lock("package.json"), None);
+        assert_eq!(companion_lock("VERSION"), None);
     }
 
     #[test]

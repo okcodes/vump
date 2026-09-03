@@ -94,7 +94,10 @@ fn walk(fs: &dyn FileSystem, dir: &Path, prefix: &str, depth: usize, found: &mut
                 format!("{prefix}/{}", entry.name)
             };
             walk(fs, &dir.join(&entry.name), &child_prefix, depth + 1, found);
-        } else if Format::detect(&entry.name).is_some() {
+        } else if let Some(format) = Format::detect(&entry.name) {
+            if !readable(fs, &dir.join(&entry.name), &entry.name, format) {
+                continue;
+            }
             found.push(if prefix.is_empty() {
                 entry.name
             } else {
@@ -102,6 +105,20 @@ fn walk(fs: &dyn FileSystem, dir: &Path, prefix: &str, depth: usize, found: &mut
             });
         }
     }
+}
+
+/// Whether a discovered file carries a version vump could keep in step.
+///
+/// Only lock files are examined. A workspace lock covers several packages and
+/// so records no single project version; declaring one would produce a
+/// configuration that fails on every command.
+fn readable(fs: &dyn FileSystem, path: &Path, name: &str, format: Format) -> bool {
+    if format != Format::CargoLock {
+        return true;
+    }
+
+    fs.read(path)
+        .is_ok_and(|contents| format.read(name, &contents).is_ok())
 }
 
 /// Writes an initial configuration tracking every version file found.

@@ -25,8 +25,10 @@ correct."
 
 ### Non-goals
 
-- Running package-manager commands (`npm install`, `cargo build`, …). vump
-  never mutates lock files; it reports when one has likely gone stale.
+- Running package-manager commands (`npm install`, `cargo build`, …).
+  Resolving dependencies is somebody else's job, and doing it here would trade
+  a fast, predictable edit for a slow one with network access, arbitrary
+  install scripts, and its own failure modes.
 - Deciding *when* to release, or orchestrating anything after the tag exists.
 - Backward compatibility with any earlier configuration or CLI surface.
 
@@ -75,11 +77,12 @@ command with a hidden fork.
 A version file is any file that records the project's version. Detection is by
 filename:
 
-| Filename       | Format     | Location of the version   |
-| -------------- | ---------- | ------------------------- |
-| `package.json` | JSON       | `.version`                |
-| `Cargo.toml`   | TOML       | `[package].version`       |
-| `VERSION`      | plain text | entire file contents      |
+| Filename       | Format     | Location of the version                  |
+| -------------- | ---------- | ---------------------------------------- |
+| `package.json` | JSON       | `.version`                               |
+| `Cargo.toml`   | TOML       | `[package].version`                      |
+| `Cargo.lock`   | TOML       | the sole `[[package]]` with no `source`  |
+| `VERSION`      | plain text | entire file contents                     |
 
 **Writes must preserve the rest of the file byte-for-byte.** Update the version
 field in place rather than parsing and re-serializing: key order, indentation,
@@ -89,8 +92,37 @@ tolerated in a repository, and correctness here is more important than the
 elegance of the parsing approach.
 
 Support for arbitrary formats via a declarative extraction spec (a path or
-pattern per file entry) is a plausible future direction, but the three built-in
+pattern per file entry) is a plausible future direction, but the built-in
 formats come first.
+
+### Lock files
+
+A lock file that records the project's own version is a version file by the
+definition above, and is tracked like any other. `Cargo.lock` qualifies: Cargo
+writes the locked crate's version into it, and `cargo build --locked` rejects a
+tree where the two disagree.
+
+This does not weaken the non-goal. Resolving dependencies is a package
+manager's job and vump never does it; restating a version vump has just written
+is the same in-place edit it already performs on a manifest. The test for
+whether an edit is allowed: **can the new contents be computed with no network
+access and no knowledge of the dependency graph?**
+
+`yarn.lock` and `pnpm-lock.yaml` record no version for the project itself — Yarn
+pins its workspace at a placeholder precisely so a bump does not churn the file
+— so they never go stale from a bump and are not tracked.
+
+The entry to write is the sole `[[package]]` carrying no `source`, since Cargo
+records one for everything it fetched. This makes the lock self-describing: it
+needs no manifest to interpret. A workspace has several such entries, at which
+point the lock cannot say which project a version belongs to, and it is refused
+rather than guessed at.
+
+**A lock file that records the version but is not declared is refused before
+anything is written**, naming the file to add. Writing the manifest alone would
+produce a tag describing a tree that cannot be built from it — the exact defect
+vump exists to prevent — and reporting it after the commit and tag already
+exist makes recovery cost a tag deletion, a reset, and a redone release.
 
 ## 3. Configuration
 
@@ -203,6 +235,13 @@ an actionable error** rather than falling back to asking:
 - **Starting a pre-release from stable without `--from`** → error. `--from` is
   required, not optional-with-a-prompt.
 - **`patch`/`minor`/`major` on a pre-release** → error, per §2.
+- **An undeclared lock file that records the version** → error naming it.
+
+More generally: everything knowable before writing is checked before writing,
+so a run that cannot produce a consistent result performs none of it and leaves
+no partial state to unwind. Where partial completion is genuinely unavoidable —
+a push failing after the commit and tag succeeded — exactly what did happen is
+reported instead.
 
 In interactive mode, the only question vump asks unconditionally is the bump
 type, and its menu lists **only operations valid from the current version** —
