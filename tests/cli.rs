@@ -69,6 +69,16 @@ impl Fixture {
             .collect()
     }
 
+    /// Runs git and returns its trimmed stdout.
+    fn git_output(&self, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(self.dir.path())
+            .output()
+            .expect("cannot run git");
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    }
+
     /// Paths git reports as changed, one per line.
     fn porcelain(&self) -> String {
         let out = Command::new("git")
@@ -929,4 +939,76 @@ fn init_declares_the_lock_beside_the_manifest() {
     let config = fx.read("vump.toml");
     assert!(config.contains("Cargo.toml"), "{config}");
     assert!(config.contains("Cargo.lock"), "{config}");
+}
+
+// ─── Tag objects ─────────────────────────────────────────────────────────────
+
+/// A fixture whose bump will tag.
+fn taggable(git: &str) -> Fixture {
+    Fixture::new()
+        .write(
+            "vump.toml",
+            &format!("files = [\"VERSION\"]\n\n[git]\n{git}"),
+        )
+        .write("VERSION", "1.2.3\n")
+        .with_git()
+}
+
+#[test]
+fn tags_are_annotated_by_default() {
+    let fx = taggable("tag = true\n");
+    assert_eq!(fx.run(&["patch"]).code, 0);
+
+    // git's own answer: an annotated tag is a `tag` object, a lightweight one
+    // points straight at the commit.
+    assert_eq!(fx.git_output(&["cat-file", "-t", "v1.2.4"]), "tag");
+    assert_eq!(
+        fx.git_output(&["tag", "-l", "--format=%(contents)", "v1.2.4"]),
+        "Release 1.2.4"
+    );
+}
+
+#[test]
+fn a_lightweight_tag_is_available_on_request() {
+    let fx = taggable("tag = true\ntag_style = \"lightweight\"\n");
+    assert_eq!(fx.run(&["patch"]).code, 0);
+
+    assert_eq!(fx.git_output(&["cat-file", "-t", "v1.2.4"]), "commit");
+}
+
+#[test]
+fn a_tag_message_is_configurable() {
+    let fx = taggable("tag = true\ntag_message = \"cut {new_version}\"\n");
+    assert_eq!(fx.run(&["patch"]).code, 0);
+
+    assert_eq!(
+        fx.git_output(&["tag", "-l", "--format=%(contents)", "v1.2.4"]),
+        "cut 1.2.4"
+    );
+}
+
+#[test]
+fn an_unusual_tag_style_is_named_before_it_happens() {
+    // Signing can fail on a machine without a key, and a lightweight tag is
+    // weaker than a release usually wants; both are worth seeing in a dry run.
+    let fx = taggable("tag = true\ntag_style = \"lightweight\"\n");
+
+    let run = fx.run(&["patch", "--dry-run"]);
+    assert!(run.stdout.contains("(lightweight)"), "{}", run.stdout);
+
+    let value = fx.run(&["patch", "--dry-run", "--json"]).json();
+    assert_eq!(value["git"]["tag_style"], "lightweight");
+}
+
+#[test]
+fn an_ordinary_annotated_tag_needs_no_remark() {
+    let fx = taggable("tag = true\n");
+
+    let run = fx.run(&["patch", "--dry-run"]);
+    assert!(
+        run.stdout.contains("would tag     v1.2.4"),
+        "{}",
+        run.stdout
+    );
+    assert!(!run.stdout.contains("(annotated)"), "{}", run.stdout);
 }

@@ -26,6 +26,9 @@ pub const DEFAULT_COMMIT_MESSAGE: &str = "chore: bump version to v{new_version}"
 /// Default tag name template.
 pub const DEFAULT_TAG_PATTERN: &str = "v{new_version}";
 
+/// Default message for an annotated or signed tag.
+pub const DEFAULT_TAG_MESSAGE: &str = "Release {new_version}";
+
 /// The placeholder replaced with the newly computed version in templates.
 const VERSION_PLACEHOLDER: &str = "{new_version}";
 
@@ -57,6 +60,35 @@ pub struct Project {
     pub tag_pattern: Option<String>,
 }
 
+/// How a tag object is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TagStyle {
+    /// A tag object carrying a message, a tagger, and a date.
+    ///
+    /// The default. `git describe` prefers annotated tags and some release
+    /// tooling ignores lightweight ones outright — a release tag is the case
+    /// the annotated format exists for.
+    #[default]
+    Annotated,
+    /// A bare pointer to a commit, with no tagger, date, or message.
+    Lightweight,
+    /// An annotated tag, signed. Requires a signing key git can reach.
+    Signed,
+}
+
+impl TagStyle {
+    /// The name this style carries in configuration.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Annotated => "annotated",
+            Self::Lightweight => "lightweight",
+            Self::Signed => "signed",
+        }
+    }
+}
+
 /// Git integration settings.
 ///
 /// These are decisions the user has already made. When a setting is present it
@@ -71,6 +103,10 @@ pub struct GitSettings {
     pub tag: bool,
     /// Template for the tag name.
     pub tag_pattern: String,
+    /// How the tag object is written.
+    pub tag_style: TagStyle,
+    /// Template for the message carried by an annotated or signed tag.
+    pub tag_message: String,
     /// Push the commit and tag to the remote. Implies `commit`.
     pub push: bool,
 }
@@ -82,6 +118,8 @@ impl Default for GitSettings {
             commit_message: DEFAULT_COMMIT_MESSAGE.to_owned(),
             tag: false,
             tag_pattern: DEFAULT_TAG_PATTERN.to_owned(),
+            tag_style: TagStyle::default(),
+            tag_message: DEFAULT_TAG_MESSAGE.to_owned(),
             push: false,
         }
     }
@@ -521,6 +559,8 @@ struct RawGit {
     commit_message: Option<String>,
     tag: Option<bool>,
     tag_pattern: Option<String>,
+    tag_style: Option<TagStyle>,
+    tag_message: Option<String>,
     push: Option<bool>,
 }
 
@@ -532,6 +572,8 @@ impl From<RawGit> for GitSettings {
             commit_message: raw.commit_message.unwrap_or(defaults.commit_message),
             tag: raw.tag.unwrap_or(defaults.tag),
             tag_pattern: raw.tag_pattern.unwrap_or(defaults.tag_pattern),
+            tag_style: raw.tag_style.unwrap_or(defaults.tag_style),
+            tag_message: raw.tag_message.unwrap_or(defaults.tag_message),
             push: raw.push.unwrap_or(defaults.push),
         }
     }
@@ -543,6 +585,31 @@ mod tests {
 
     fn parse(text: &str) -> Result<Config, ConfigError> {
         Config::parse(Path::new("vump.toml"), text)
+    }
+
+    #[test]
+    fn tags_are_annotated_unless_configured_otherwise() {
+        // A release tag is what the annotated format exists for, so it is the
+        // default rather than the opt-in.
+        assert_eq!(GitSettings::default().tag_style, TagStyle::Annotated);
+        assert_eq!(GitSettings::default().tag_message, DEFAULT_TAG_MESSAGE);
+    }
+
+    #[test]
+    fn a_tag_style_is_read_from_configuration() {
+        for (written, expected) in [
+            ("lightweight", TagStyle::Lightweight),
+            ("annotated", TagStyle::Annotated),
+            ("signed", TagStyle::Signed),
+        ] {
+            let raw: RawGit = toml::from_str(&format!("tag_style = \"{written}\"")).unwrap();
+            assert_eq!(GitSettings::from(raw).tag_style, expected);
+        }
+    }
+
+    #[test]
+    fn an_unknown_tag_style_is_rejected() {
+        assert!(toml::from_str::<RawGit>("tag_style = \"gpg\"").is_err());
     }
 
     #[test]

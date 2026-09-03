@@ -41,22 +41,6 @@ the same ambiguity.
 
 ---
 
-### 2. Annotated and signed tags
-
-**Problem.** Tags are created with `git tag <name>`, which makes a lightweight
-tag: a bare pointer with no tagger, date, or message.
-
-**Why it matters.** Many workflows expect annotated tags — `git describe`
-prefers them, and some release tooling ignores lightweight tags entirely.
-Signed tags are the natural companion for a repository that already signs
-commits.
-
-**Shape.** A `[git]` setting selecting the tag style, defaulting to the current
-behavior so nothing changes silently. Annotated tags need a message template
-alongside `tag_pattern`.
-
----
-
 ## Ideas, not yet decided
 
 Worth recording. None have an agreed problem statement yet.
@@ -98,6 +82,13 @@ vump otherwise has no need for — which one setting does not obviously justify.
 The composite action takes `version`, `config` and `vump-version`. Passing a
 tag now selects its own project, so a `project` input is only needed for a
 repository that verifies bare versions rather than tags.
+
+### A `--tag-style` flag
+
+`tag_style` is configuration only. A per-run override would matter to someone
+whose signing key is temporarily unreachable, but the case is hypothetical and
+`--no-git` already covers skipping the tag entirely. Adding it needs a real
+occurrence first.
 
 ### Per-project commit messages
 

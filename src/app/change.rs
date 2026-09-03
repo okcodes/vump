@@ -11,10 +11,12 @@ use semver::Version;
 use thiserror::Error;
 
 use crate::app::{AppError, FileVersion, resolve};
+use crate::config::TagStyle;
 use crate::config::{GitSettings, Project};
 use crate::domain::TagPattern;
 use crate::domain::TransitionError;
 use crate::domain::version_file::Format;
+use crate::ports::Annotation;
 use crate::ports::{FileSystem, Vcs, VcsError};
 
 /// A tracked file and the version it records today.
@@ -29,13 +31,37 @@ pub struct FileChange {
     pub from: Version,
 }
 
+/// A tag to create, and how it will be written.
+///
+/// The annotation travels with the tag rather than beside it, so a run cannot
+/// carry a message for a tag it will never create.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagPlan {
+    /// The tag name, rendered from the project's pattern.
+    pub name: String,
+    /// The message and signing choice, absent for a lightweight tag.
+    pub annotation: Option<Annotation>,
+}
+
+impl TagPlan {
+    /// How the tag is written, as it appears in configuration.
+    #[must_use]
+    pub fn style(&self) -> TagStyle {
+        match &self.annotation {
+            None => TagStyle::Lightweight,
+            Some(annotation) if annotation.signed => TagStyle::Signed,
+            Some(_) => TagStyle::Annotated,
+        }
+    }
+}
+
 /// The git side-effects a run will perform.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GitPlan {
     /// Commit message, when a commit will be made.
     pub commit: Option<String>,
-    /// Tag name, when a tag will be created.
-    pub tag: Option<String>,
+    /// The tag to create, when one will be.
+    pub tag: Option<TagPlan>,
     /// Whether the commit and tag will be pushed.
     pub push: bool,
 }
@@ -126,6 +152,10 @@ pub struct GitPlanning<'a> {
     pub commit_message: &'a str,
     /// Tag template for the project being changed.
     pub tag: &'a TagPattern,
+    /// How the tag object is written.
+    pub tag_style: TagStyle,
+    /// Message template for an annotated or signed tag.
+    pub tag_message: &'a str,
 }
 
 /// Git side-effects requested on the command line.
@@ -221,7 +251,20 @@ pub fn compose(
         commit: planning.intent.commit.then(|| {
             GitSettings::render(planning.commit_message, project.name.as_deref(), &target)
         }),
-        tag: planning.intent.tag.then(|| planning.tag.render(&target)),
+        tag: planning.intent.tag.then(|| TagPlan {
+            name: planning.tag.render(&target),
+            annotation: match planning.tag_style {
+                TagStyle::Lightweight => None,
+                TagStyle::Annotated | TagStyle::Signed => Some(Annotation {
+                    message: GitSettings::render(
+                        planning.tag_message,
+                        project.name.as_deref(),
+                        &target,
+                    ),
+                    signed: planning.tag_style == TagStyle::Signed,
+                }),
+            },
+        }),
         push: planning.intent.push,
     };
 
@@ -302,13 +345,13 @@ pub fn apply(
     vcs.commit(message)?;
     outcome.committed = true;
 
-    if let Some(tag) = changes.git.tag.as_deref() {
-        vcs.tag(tag)?;
+    if let Some(tag) = changes.git.tag.as_ref() {
+        vcs.tag(&tag.name, tag.annotation.as_ref())?;
         outcome.tagged = true;
     }
 
     if changes.git.push {
-        match vcs.push(changes.git.tag.as_deref()) {
+        match vcs.push(changes.git.tag.as_ref().map(|t| t.name.as_str())) {
             Ok(()) => outcome.pushed = true,
             Err(e) => outcome.push_error = Some(e.to_string()),
         }
@@ -321,6 +364,7 @@ pub fn apply(
 mod tests {
     use super::*;
     use crate::adapters::{MemoryFileSystem, MemoryVcs, VcsCall};
+    use crate::config::DEFAULT_TAG_MESSAGE;
     use crate::config::DEFAULT_TAG_PATTERN;
 
     fn v(text: &str) -> Version {
@@ -356,8 +400,88 @@ mod tests {
                 intent,
                 commit_message: &settings.commit_message,
                 tag: &pattern,
+                tag_style: TagStyle::default(),
+                tag_message: DEFAULT_TAG_MESSAGE,
             },
         )
+    }
+
+    /// Composes a tagging change set with `style` and `message`.
+    fn tagged(style: TagStyle, message: &str, name: Option<&str>) -> ChangeSet {
+        let pattern = TagPattern::parse(DEFAULT_TAG_PATTERN).unwrap();
+        let settings = GitSettings::default();
+        compose(
+            &Project {
+                name: name.map(ToOwned::to_owned),
+                files: vec!["VERSION".to_owned()],
+                tag_pattern: None,
+            },
+            v("1.2.4"),
+            vec![FileVersion {
+                path: "VERSION".to_owned(),
+                version: v("1.2.3"),
+            }],
+            GitPlanning {
+                intent: GitIntent {
+                    commit: true,
+                    tag: true,
+                    push: false,
+                },
+                commit_message: &settings.commit_message,
+                tag: &pattern,
+                tag_style: style,
+                tag_message: message,
+            },
+        )
+    }
+
+    #[test]
+    fn an_annotated_tag_carries_its_rendered_message() {
+        let tag = tagged(TagStyle::Annotated, DEFAULT_TAG_MESSAGE, None)
+            .git
+            .tag
+            .unwrap();
+
+        assert_eq!(tag.name, "v1.2.4");
+        assert_eq!(
+            tag.annotation,
+            Some(Annotation {
+                message: "Release 1.2.4".to_owned(),
+                signed: false,
+            })
+        );
+    }
+
+    #[test]
+    fn a_lightweight_tag_carries_no_annotation() {
+        let tag = tagged(TagStyle::Lightweight, DEFAULT_TAG_MESSAGE, None)
+            .git
+            .tag
+            .unwrap();
+        assert_eq!(tag.annotation, None);
+        assert_eq!(tag.style(), TagStyle::Lightweight);
+    }
+
+    #[test]
+    fn signing_is_a_property_of_the_annotation() {
+        // There is no way to ask for a signature without a message to sign:
+        // the two travel together or not at all.
+        let tag = tagged(TagStyle::Signed, DEFAULT_TAG_MESSAGE, None)
+            .git
+            .tag
+            .unwrap();
+        let annotation = tag.annotation.expect("a signed tag is an annotated one");
+        assert!(annotation.signed);
+        assert_eq!(annotation.message, "Release 1.2.4");
+    }
+
+    #[test]
+    fn a_tag_message_names_its_project() {
+        let tag = tagged(TagStyle::Annotated, "{project} {new_version}", Some("api"))
+            .git
+            .tag
+            .unwrap();
+        assert_eq!(tag.annotation.unwrap().message, "api 1.2.4");
     }
 
     #[test]
@@ -441,7 +565,14 @@ mod tests {
             [
                 VcsCall::Stage(vec!["VERSION".to_owned()]),
                 VcsCall::Commit("chore: bump version to v1.2.4".to_owned()),
-                VcsCall::Tag("v1.2.4".to_owned()),
+                VcsCall::Tag(
+                    "v1.2.4".to_owned(),
+                    // The default style: annotated, with the default message.
+                    Some(Annotation {
+                        message: "Release 1.2.4".to_owned(),
+                        signed: false,
+                    }),
+                ),
             ]
         );
     }

@@ -9,11 +9,12 @@ use std::io::IsTerminal;
 use serde_json::{Value, json};
 
 use crate::app::bump::BumpPlan;
-use crate::app::change::{ChangeSet, Outcome};
+use crate::app::change::{ChangeSet, Outcome, TagPlan};
 use crate::app::check::CheckReport;
 use crate::app::status::ProjectStatus;
 use crate::app::update::{Channel, Listing, Release, UpdateOutcome};
 use crate::cli::exit::Exit;
+use crate::config::TagStyle;
 
 /// Symbols used to mark pass and fail states.
 ///
@@ -176,8 +177,8 @@ pub fn summary(plan: &BumpPlan) -> String {
     if let Some(message) = plan.changes.git.commit.as_deref() {
         let _ = writeln!(out, "  Commit:   {message}");
     }
-    if let Some(tag) = plan.changes.git.tag.as_deref() {
-        let _ = writeln!(out, "  Tag:      {tag}");
+    if let Some(tag) = plan.changes.git.tag.as_ref() {
+        let _ = writeln!(out, "  Tag:      {}{}", tag.name, tag_note(tag));
     }
     let _ = writeln!(
         out,
@@ -263,7 +264,8 @@ pub fn applied(changes: &ChangeSet, outcome: &Outcome, json: bool) {
                 "committed": outcome.committed,
                 "commit_message": changes.git.commit,
                 "tagged": outcome.tagged,
-                "tag": changes.git.tag,
+                "tag": changes.git.tag.as_ref().map(|t| &t.name),
+                "tag_style": changes.git.tag.as_ref().map(|t| t.style().as_str()),
                 "pushed": outcome.pushed,
                 "push_error": outcome.push_error,
             },
@@ -284,8 +286,8 @@ pub fn applied(changes: &ChangeSet, outcome: &Outcome, json: bool) {
     if let Some(message) = changes.git.commit.as_deref().filter(|_| outcome.committed) {
         println!("{} committed  {message}", marks.ok);
     }
-    if let Some(tag) = changes.git.tag.as_deref().filter(|_| outcome.tagged) {
-        println!("{} tagged     {tag}", marks.ok);
+    if let Some(tag) = changes.git.tag.as_ref().filter(|_| outcome.tagged) {
+        println!("{} tagged     {}{}", marks.ok, tag.name, tag_note(tag));
     }
 
     if let Some(detail) = outcome.push_error.as_deref() {
@@ -295,13 +297,33 @@ pub fn applied(changes: &ChangeSet, outcome: &Outcome, json: bool) {
         eprintln!("{} push failed: {detail}", marks.fail);
         eprintln!();
         eprintln!("Everything else succeeded. To finish:");
-        eprintln!("  {}", push_command(changes.git.tag.as_deref()));
+        eprintln!(
+            "  {}",
+            push_command(changes.git.tag.as_ref().map(|t| t.name.as_str()))
+        );
     } else if outcome.pushed {
         println!("{} pushed", marks.ok);
     } else if outcome.committed {
         println!();
         println!("To push:");
-        println!("  {}", push_command(changes.git.tag.as_deref()));
+        println!(
+            "  {}",
+            push_command(changes.git.tag.as_ref().map(|t| t.name.as_str()))
+        );
+    }
+}
+
+/// Names how a tag will be written, when that is not the default.
+///
+/// Signing can fail on a machine without a key, and a lightweight tag is
+/// weaker than what a release usually wants — both are worth seeing before
+/// they happen, and neither needs saying when the tag is an ordinary
+/// annotated one.
+fn tag_note(tag: &TagPlan) -> &'static str {
+    match tag.style() {
+        TagStyle::Annotated => "",
+        TagStyle::Lightweight => "  (lightweight)",
+        TagStyle::Signed => "  (signed)",
     }
 }
 
@@ -316,8 +338,8 @@ fn describe_git_plan(changes: &ChangeSet) {
     if let Some(message) = changes.git.commit.as_deref() {
         println!("  would commit  {message}");
     }
-    if let Some(tag) = changes.git.tag.as_deref() {
-        println!("  would tag     {tag}");
+    if let Some(tag) = changes.git.tag.as_ref() {
+        println!("  would tag     {}{}", tag.name, tag_note(tag));
     }
     if changes.git.push {
         println!("  would push");
@@ -341,7 +363,8 @@ fn changes_json(changes: &ChangeSet) -> Vec<Value> {
 fn git_json(changes: &ChangeSet) -> Value {
     json!({
         "commit_message": changes.git.commit,
-        "tag": changes.git.tag,
+        "tag": changes.git.tag.as_ref().map(|t| &t.name),
+        "tag_style": changes.git.tag.as_ref().map(|t| t.style().as_str()),
         "push": changes.git.push,
     })
 }

@@ -83,7 +83,14 @@ tag = true
 push = false
 commit_message = "chore: bump version to v{new_version}"
 tag_pattern = "v{new_version}"
+tag_style = "annotated"                 # or "lightweight", or "signed"
+tag_message = "Release {new_version}"
 ```
+
+Tags are **annotated** unless you ask otherwise — a real tag object with a
+message, a tagger and a date, which is what `git describe` prefers and what
+some release tooling requires. `tag_style = "signed"` signs it; `"lightweight"`
+creates the bare pointer `git tag` makes on its own.
 
 **Configuration is authoritative.** A setting present here is a decision
 already made: vump acts on it without asking again, in guided runs too. Flags

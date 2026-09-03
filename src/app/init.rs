@@ -10,7 +10,7 @@ use std::path::Path;
 
 use thiserror::Error;
 
-use crate::config::{DEFAULT_COMMIT_MESSAGE, DEFAULT_TAG_PATTERN, FILE_NAME};
+use crate::config::{DEFAULT_COMMIT_MESSAGE, DEFAULT_TAG_MESSAGE, DEFAULT_TAG_PATTERN, FILE_NAME};
 use crate::domain::version_file::Format;
 use crate::ports::{FileSystem, FsError};
 
@@ -193,6 +193,11 @@ fn render(files: &[String]) -> String {
     let _ = writeln!(out, "push = false");
     let _ = writeln!(out, "# commit_message = \"{DEFAULT_COMMIT_MESSAGE}\"");
     let _ = writeln!(out, "# tag_pattern = \"{DEFAULT_TAG_PATTERN}\"");
+    let _ = writeln!(out, "# tag_message = \"{DEFAULT_TAG_MESSAGE}\"");
+    let _ = writeln!(
+        out,
+        "# tag_style = \"annotated\"   # or \"lightweight\", or \"signed\""
+    );
 
     out
 }

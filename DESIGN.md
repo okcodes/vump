@@ -188,7 +188,8 @@ whether its files agree.
 
 `tag_pattern` may be set per project, overriding the repository-wide one, and
 both it and `commit_message` accept a `{project}` placeholder so that one
-repository-wide template can cover every project.
+repository-wide template can cover every project. `tag_message` accepts the
+same placeholders.
 
 This is not cosmetic. Independently-versioned projects sharing one pattern
 collide as soon as two of them reach the same version, and a pushed tag carries
@@ -216,8 +217,23 @@ commit = true
 commit_message = "chore: bump version to v{new_version}"
 tag = true
 tag_pattern = "v{new_version}"
+tag_style = "annotated"          # or "lightweight", or "signed"
+tag_message = "Release {new_version}"
 push = false
 ```
+
+Tags are **annotated by default**. A lightweight tag is a bare pointer with no
+tagger, date, or message; `git describe` prefers annotated tags and some
+release tooling ignores lightweight ones outright. A release tag is precisely
+what the annotated format exists for, so producing the weaker kind by default
+would be a poor decision made silently. `tag_style = "lightweight"` restores
+it.
+
+`signed` produces an annotated tag, signed. A signature is a property of an
+annotation rather than an independent setting: there is nothing to sign
+without a message, and the configuration cannot express the combination. Where
+git prompts for a key it prompts, exactly as it already does for `git commit`
+under `commit.gpgsign` — that is git's business, not a prompt vump introduces.
 
 **Configuration is authoritative.** If `vump.toml` says `commit = true`, vump
 commits — it does not ask, in any mode. Settings present in configuration are

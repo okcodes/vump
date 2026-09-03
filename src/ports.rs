@@ -131,6 +131,19 @@ pub enum InteractionError {
     },
 }
 
+/// The message carried by a tag that is more than a bare pointer.
+///
+/// A signed tag is always an annotated one, so signing is a property of the
+/// annotation rather than an independent setting: there is no way to ask for a
+/// signature without a message to sign.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Annotation {
+    /// Message recorded on the tag object.
+    pub message: String,
+    /// Whether to sign the tag object.
+    pub signed: bool,
+}
+
 /// Version control operations required by use cases.
 ///
 /// Implementations act on one repository, fixed at construction, so that no
@@ -163,7 +176,7 @@ pub trait Vcs {
     ///
     /// Returns [`VcsError`] when the tag cannot be created, including when one
     /// of that name already exists.
-    fn tag(&self, name: &str) -> Result<(), VcsError>;
+    fn tag(&self, name: &str, annotation: Option<&Annotation>) -> Result<(), VcsError>;
 
     /// Pushes the current branch, and `tag` when one is given.
     ///
