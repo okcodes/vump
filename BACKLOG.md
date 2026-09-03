@@ -18,7 +18,45 @@ starting point, not a specification — expect it to change while building.
 
 Ranked by value.
 
-### 1. Annotated and signed tags
+### 1. `package-lock.json` moves with its manifest
+
+**Problem.** `Cargo.lock` is now tracked and written in the same run as its
+manifest. `package-lock.json` has the identical defect and is not: it records
+the project's version at both `.version` and `.packages[""].version`, and
+`npm ci` rejects a tree where those disagree with `package.json`.
+
+**Why it matters.** It is the same failed release, in an ecosystem this project
+ships from. A tag lands, `npm ci` fails in the release job, and recovery costs
+a deleted tag.
+
+**Shape.** A `Format::PackageLock` beside `Format::CargoLock`, written with the
+existing depth-aware JSON scan. Two version sites rather than one, and
+`lockfileVersion` 1, 2 and 3 place them differently — v1 has no `packages` map
+at all. `companion_lock` in `app/mod.rs` gains the `package.json` case.
+
+---
+
+### 2. Workspace lock files
+
+**Problem.** A lock covering several packages built from the repository records
+no single project's version, so vump neither writes it nor asks for it to be
+declared. A workspace member's bump therefore still leaves its lock stale —
+the bug that was just fixed, in a layout vump cannot currently resolve.
+
+**Why it matters.** `[[project]]` exists to serve monorepos, and a Cargo
+workspace is the most common Rust shape of one.
+
+**Shape.** The ambiguity is only in the lock file: the manifest names its
+package, so the right `[[package]]` entry is findable once the two are read
+together. That means resolving a lock against the manifest declared beside it
+rather than in isolation, which is a change to how `read_project_versions`
+composes. Sibling crates that pin each other by version need their
+requirements bumped too, and that part may be worth refusing rather than
+building.
+
+---
+
+### 3. Annotated and signed tags
 
 **Problem.** Tags are created with `git tag <name>`, which makes a lightweight
 tag: a bare pointer with no tagger, date, or message.
@@ -40,24 +78,13 @@ Worth recording. None have an agreed problem statement yet.
 
 ### Declarative version-file formats
 
-Detection is by filename across three built-in formats. `pyproject.toml`,
+Detection is by filename across the built-in formats. `pyproject.toml`,
 `*.csproj`, `gradle.properties` and others need a per-entry extraction spec — a
 path for structured formats, a pattern for the rest.
 
 The reason this has not been designed: it changes the configuration schema, and
 doing that well needs a real target format in hand rather than a guess at what
 would be general enough.
-
-### Update a lock file's own version entry
-
-`Cargo.lock` records the version of the crate it locks. Bumping `Cargo.toml`
-leaves the two disagreeing, which fails `cargo build --locked`. vump currently
-reports this and stops there.
-
-The tension: "vump never runs a package manager" is a firm non-goal, and rightly
-so. But editing the lock's *own* entry is not resolving dependencies — it is the
-same in-place version edit vump already performs on manifests. Whether that
-distinction is real enough to act on is undecided.
 
 ### Enforcing provenance verification, not just publishing it
 
@@ -112,6 +139,33 @@ strings: `1.0` becomes a float and loses its trailing zero, and bare `yes`/`no`
 become booleans. JSON has no comments, which the generated configuration relies
 on. Supporting several formats would also make the same tool look different in
 every repository.
+
+### Running the package manager to refresh a lock file
+
+vump writes a lock file's own version entry, which needs no network and no
+knowledge of the dependency graph. Running `npm install` or `cargo check` to
+do it instead would mean unbounded runtime, network access, and — for npm —
+executing arbitrary lifecycle scripts, all inside a tool whose job is editing a
+version string. It would also make "your build is broken" one of vump's failure
+modes, and require guessing which package manager a repository uses.
+
+The line: vump may write a value it already computed; it may never resolve
+dependencies.
+
+### A command to resume an interrupted bump
+
+Proposed when a bump could commit and tag before reporting that a lock file had
+gone stale, leaving a half-finished release to clean up by hand.
+
+The failure it would recover from no longer happens: everything knowable before
+writing is now checked before writing, so a run that cannot finish cleanly does
+nothing at all. A resume command would also need persisted state — which the
+design rejects for `--channel` on the same grounds — and would have to decide
+which files and which lines to commit, questions with no defensible answer.
+Running the fix leaves the tree dirty, which is itself refused.
+
+Where a repair is genuinely needed, `vump set <version>` writes every tracked
+file and requires no prior agreement between them. That is the resume command.
 
 ### A saved plan-then-apply workflow
 
