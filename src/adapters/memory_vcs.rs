@@ -7,7 +7,7 @@
 
 use std::sync::Mutex;
 
-use crate::ports::{Vcs, VcsError, WorkingTree};
+use crate::ports::{Annotation, Vcs, VcsError, WorkingTree};
 
 /// One operation performed against the repository.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,7 +17,7 @@ pub enum VcsCall {
     /// A commit was created with this message.
     Commit(String),
     /// A tag was created with this name.
-    Tag(String),
+    Tag(String, Option<Annotation>),
     /// A push was performed, optionally including this tag.
     Push(Option<String>),
 }
@@ -97,9 +97,9 @@ impl Vcs for MemoryVcs {
         Ok(())
     }
 
-    fn tag(&self, name: &str) -> Result<(), VcsError> {
+    fn tag(&self, name: &str, annotation: Option<&Annotation>) -> Result<(), VcsError> {
         self.guard("tag")?;
-        self.record(VcsCall::Tag(name.to_owned()));
+        self.record(VcsCall::Tag(name.to_owned(), annotation.cloned()));
         Ok(())
     }
 
@@ -119,14 +119,14 @@ mod tests {
         let vcs = MemoryVcs::new();
         vcs.stage(&["VERSION".to_owned()]).unwrap();
         vcs.commit("bump").unwrap();
-        vcs.tag("v1.0.0").unwrap();
+        vcs.tag("v1.0.0", None).unwrap();
 
         assert_eq!(
             vcs.calls(),
             [
                 VcsCall::Stage(vec!["VERSION".to_owned()]),
                 VcsCall::Commit("bump".to_owned()),
-                VcsCall::Tag("v1.0.0".to_owned()),
+                VcsCall::Tag("v1.0.0".to_owned(), None),
             ]
         );
     }

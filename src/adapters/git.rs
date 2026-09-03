@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::ports::{Vcs, VcsError, WorkingTree};
+use crate::ports::{Annotation, Vcs, VcsError, WorkingTree};
 
 /// Runs `git` against one repository.
 #[derive(Debug, Clone)]
@@ -72,8 +72,17 @@ impl Vcs for GitCli {
         Ok(())
     }
 
-    fn tag(&self, name: &str) -> Result<(), VcsError> {
-        self.run("tag", &["tag", name])?;
+    fn tag(&self, name: &str, annotation: Option<&Annotation>) -> Result<(), VcsError> {
+        let mut args = vec!["tag"];
+        if let Some(annotation) = annotation {
+            // -s implies an annotated tag, so the two flags are exclusive.
+            args.push(if annotation.signed { "-s" } else { "-a" });
+            args.push("-m");
+            args.push(&annotation.message);
+        }
+        args.push(name);
+
+        self.run("tag", &args)?;
         Ok(())
     }
 

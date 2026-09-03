@@ -47,8 +47,11 @@ mod tests {
     use super::*;
     use crate::adapters::{MemoryFileSystem, MemoryVcs, VcsCall};
     use crate::app::change::{GitIntent, apply};
+    use crate::config::DEFAULT_TAG_MESSAGE;
+    use crate::config::TagStyle;
     use crate::config::{DEFAULT_TAG_PATTERN, GitSettings};
     use crate::domain::TagPattern;
+    use crate::ports::Annotation;
 
     fn project(files: &[&str]) -> Project {
         Project {
@@ -78,6 +81,8 @@ mod tests {
                 intent,
                 commit_message: &settings.commit_message,
                 tag: &pattern,
+                tag_style: TagStyle::default(),
+                tag_message: DEFAULT_TAG_MESSAGE,
             },
         )
         .unwrap()
@@ -196,7 +201,14 @@ mod tests {
             [
                 VcsCall::Stage(vec!["VERSION".to_owned()]),
                 VcsCall::Commit("chore: bump version to v3.0.0".to_owned()),
-                VcsCall::Tag("v3.0.0".to_owned()),
+                VcsCall::Tag(
+                    "v3.0.0".to_owned(),
+                    // The default style: annotated, with the default message.
+                    Some(Annotation {
+                        message: "Release 3.0.0".to_owned(),
+                        signed: false,
+                    }),
+                ),
             ]
         );
     }

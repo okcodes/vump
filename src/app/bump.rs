@@ -108,9 +108,11 @@ pub fn plan_from(
 mod tests {
     use super::*;
     use crate::adapters::MemoryFileSystem;
+    use crate::app::change::TagPlan;
     use crate::app::change::{GitIntent, GitPlan};
     use crate::config::{DEFAULT_TAG_PATTERN, GitSettings};
     use crate::domain::{StableBump, TagPattern};
+    use crate::ports::Annotation;
 
     fn project(files: &[&str]) -> Project {
         Project {
@@ -145,6 +147,8 @@ mod tests {
             intent,
             commit_message: &settings.commit_message,
             tag,
+            tag_style: settings.tag_style,
+            tag_message: &settings.tag_message,
         }
     }
 
@@ -270,7 +274,13 @@ mod tests {
             plan.changes.git,
             GitPlan {
                 commit: Some("chore: bump version to v1.3.0".to_owned()),
-                tag: Some("v1.3.0".to_owned()),
+                tag: Some(TagPlan {
+                    name: "v1.3.0".to_owned(),
+                    annotation: Some(Annotation {
+                        message: "Release 1.3.0".to_owned(),
+                        signed: false,
+                    }),
+                }),
                 push: false,
             }
         );

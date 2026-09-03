@@ -499,6 +499,8 @@ fn interactive(ctx: &Context) -> Result<Exit, CliError> {
             intent,
             commit_message: &ctx.config.git.commit_message,
             tag: &tag_pattern,
+            tag_style: ctx.config.git.tag_style,
+            tag_message: &ctx.config.git.tag_message,
         },
     )?;
 
@@ -625,6 +627,8 @@ fn bump(
             intent,
             commit_message: &ctx.config.git.commit_message,
             tag: &tag_pattern,
+            tag_style: ctx.config.git.tag_style,
+            tag_message: &ctx.config.git.tag_message,
         },
     )?;
 
@@ -672,6 +676,8 @@ fn set(ctx: &Context, version: &str, dry_run: bool, git_args: &GitArgs) -> Resul
             intent,
             commit_message: &ctx.config.git.commit_message,
             tag: &tag_pattern,
+            tag_style: ctx.config.git.tag_style,
+            tag_message: &ctx.config.git.tag_message,
         },
     )?;
 
