@@ -18,25 +18,7 @@ starting point, not a specification — expect it to change while building.
 
 Ranked by value.
 
-### 1. `package-lock.json` moves with its manifest
-
-**Problem.** `Cargo.lock` is now tracked and written in the same run as its
-manifest. `package-lock.json` has the identical defect and is not: it records
-the project's version at both `.version` and `.packages[""].version`, and
-`npm ci` rejects a tree where those disagree with `package.json`.
-
-**Why it matters.** It is the same failed release, in an ecosystem this project
-ships from. A tag lands, `npm ci` fails in the release job, and recovery costs
-a deleted tag.
-
-**Shape.** A `Format::PackageLock` beside `Format::CargoLock`, written with the
-existing depth-aware JSON scan. Two version sites rather than one, and
-`lockfileVersion` 1, 2 and 3 place them differently — v1 has no `packages` map
-at all. `companion_lock` in `app/mod.rs` gains the `package.json` case.
-
----
-
-### 2. Workspace lock files
+### 1. Workspace lock files
 
 **Problem.** A lock covering several packages built from the repository records
 no single project's version, so vump neither writes it nor asks for it to be
@@ -48,15 +30,18 @@ workspace is the most common Rust shape of one.
 
 **Shape.** The ambiguity is only in the lock file: the manifest names its
 package, so the right `[[package]]` entry is findable once the two are read
-together. That means resolving a lock against the manifest declared beside it
-rather than in isolation, which is a change to how `read_project_versions`
-composes. Sibling crates that pin each other by version need their
-requirements bumped too, and that part may be worth refusing rather than
-building.
+together. That means resolving a lock against the manifest declared beside it,
+rather than in isolation — a change to `Format`'s signature, which currently
+takes only a filename and its contents and is pure because of it. Sibling
+crates that pin each other by version need their requirements bumped too, and
+that part may be worth refusing rather than building.
+
+npm workspaces record every member under `packages` in one root lock, and have
+the same ambiguity.
 
 ---
 
-### 3. Annotated and signed tags
+### 2. Annotated and signed tags
 
 **Problem.** Tags are created with `git tag <name>`, which makes a lightweight
 tag: a bare pointer with no tagger, date, or message.

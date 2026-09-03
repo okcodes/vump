@@ -113,7 +113,7 @@ fn walk(fs: &dyn FileSystem, dir: &Path, prefix: &str, depth: usize, found: &mut
 /// so records no single project version; declaring one would produce a
 /// configuration that fails on every command.
 fn readable(fs: &dyn FileSystem, path: &Path, name: &str, format: Format) -> bool {
-    if format != Format::CargoLock {
+    if !format.is_lock() {
         return true;
     }
 

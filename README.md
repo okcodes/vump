@@ -147,6 +147,7 @@ order, indentation, and comments elsewhere in the file survive untouched.
 | Filename | Version location |
 | --- | --- |
 | `package.json` | top-level `version` |
+| `package-lock.json` | top-level `version`, and the root `packages` entry |
 | `Cargo.toml` | `[package].version` |
 | `Cargo.lock` | the `[[package]]` entry for this crate |
 | `VERSION` | the whole file |
@@ -156,9 +157,9 @@ own, and neither is a locked dependency's.
 
 ### Lock files move with the manifest
 
-`Cargo.lock` records this crate's own version, and `cargo build --locked`
-rejects a tree where it and `Cargo.toml` disagree. So vump writes it in the
-same run:
+`Cargo.lock` and `package-lock.json` record their project's own version, and
+`cargo build --locked` and `npm ci` both reject a tree where a lock and its
+manifest disagree. So vump writes them in the same run:
 
 ```bash
 $ vump patch --tag
@@ -181,8 +182,8 @@ no network and no knowledge of the dependency graph.
 bump never invalidates them and they are not tracked.
 
 If a lock file records your version but is missing from `files`, vump stops
-before writing anything and names it. A workspace lock covering several crates
-is left alone — it records no single project's version.
+before writing anything and names it. A Cargo workspace lock covering several
+crates is left alone — it records no single project's version.
 
 ## Version rules
 

@@ -124,7 +124,7 @@ fn check_declared_locks(
     project: &Project,
 ) -> Result<(), AppError> {
     for declared in &project.files {
-        let Some(lock) = companion_lock(declared) else {
+        let Some((lock, format)) = companion_lock(declared) else {
             continue;
         };
         if project.files.contains(&lock) {
@@ -138,7 +138,7 @@ fn check_declared_locks(
 
         // Reading it decides whether it is one vump could keep in step.
         let contents = fs.read(&absolute)?;
-        if Format::CargoLock.read(&lock, &contents).is_ok() {
+        if format.read(&lock, &contents).is_ok() {
             return Err(AppError::UndeclaredLock {
                 lock,
                 manifest: declared.clone(),
@@ -151,22 +151,28 @@ fn check_declared_locks(
 
 /// Names the lock file that sits beside `declared` and records its version.
 ///
-/// Only Cargo is covered: a `yarn.lock` or `pnpm-lock.yaml` carries no version
-/// for the project itself, so a bump never invalidates one.
-fn companion_lock(declared: &str) -> Option<String> {
+/// Only the lock files that record the project's own version are listed. A
+/// `yarn.lock` or `pnpm-lock.yaml` carries none — Yarn pins its workspace at a
+/// placeholder precisely so a bump does not churn the file — so a bump never
+/// invalidates one.
+fn companion_lock(declared: &str) -> Option<(String, Format)> {
     let (directory, name) = declared
         .rsplit_once('/')
         .map_or(("", declared), |(dir, name)| (dir, name));
 
-    if name != "Cargo.toml" {
-        return None;
-    }
+    let (lock, format) = match name {
+        "Cargo.toml" => ("Cargo.lock", Format::CargoLock),
+        "package.json" => ("package-lock.json", Format::PackageLock),
+        _ => return None,
+    };
 
-    Some(if directory.is_empty() {
-        "Cargo.lock".to_owned()
+    let path = if directory.is_empty() {
+        lock.to_owned()
     } else {
-        format!("{directory}/Cargo.lock")
-    })
+        format!("{directory}/{lock}")
+    };
+
+    Some((path, format))
 }
 
 /// Resolves a configured path against the configuration's directory.
@@ -302,16 +308,29 @@ mod tests {
     }
 
     #[test]
-    fn only_cargo_manifests_have_a_companion_lock() {
+    fn only_locks_recording_the_project_version_are_companions() {
         // yarn and pnpm locks carry no version for the project itself, so a
         // bump never invalidates one.
-        assert_eq!(companion_lock("Cargo.toml").as_deref(), Some("Cargo.lock"));
         assert_eq!(
-            companion_lock("crates/api/Cargo.toml").as_deref(),
+            companion_lock("Cargo.toml")
+                .map(|(path, _)| path)
+                .as_deref(),
+            Some("Cargo.lock")
+        );
+        assert_eq!(
+            companion_lock("crates/api/Cargo.toml")
+                .map(|(path, _)| path)
+                .as_deref(),
             Some("crates/api/Cargo.lock")
         );
-        assert_eq!(companion_lock("package.json"), None);
-        assert_eq!(companion_lock("VERSION"), None);
+        assert_eq!(
+            companion_lock("ui/package.json")
+                .map(|(path, _)| path)
+                .as_deref(),
+            Some("ui/package-lock.json")
+        );
+        assert!(companion_lock("yarn.lock").is_none());
+        assert!(companion_lock("VERSION").is_none());
     }
 
     #[test]

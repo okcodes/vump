@@ -26,6 +26,9 @@ pub enum Format {
     /// Cargo lock file; the version lives in the `[[package]]` entry built
     /// from this repository rather than fetched.
     CargoLock,
+    /// npm lock file; the version lives at the top level, and again under
+    /// `packages[""]` from lockfile version 2 onwards.
+    PackageLock,
     /// A file whose entire contents are the version.
     PlainText,
 }
@@ -71,6 +74,21 @@ pub enum VersionFileError {
         detail: String,
     },
 
+    /// The lock file records the project's version twice, and the two records
+    /// disagree.
+    #[error(
+        "{file} records this project's version twice and the two disagree: \
+         {root:?} at the top level, {nested:?} under packages[\"\"]"
+    )]
+    InconsistentLock {
+        /// The file being read.
+        file: String,
+        /// The version recorded at the top level.
+        root: String,
+        /// The version recorded for the root package entry.
+        nested: String,
+    },
+
     /// The lock file covers several packages built from this repository, so
     /// which one records the project's version is ambiguous.
     #[error(
@@ -103,6 +121,7 @@ impl Format {
             "package.json" => Some(Self::PackageJson),
             "Cargo.toml" => Some(Self::CargoToml),
             "Cargo.lock" => Some(Self::CargoLock),
+            "package-lock.json" => Some(Self::PackageLock),
             "VERSION" => Some(Self::PlainText),
             _ => None,
         }
@@ -123,7 +142,7 @@ impl Format {
     #[must_use]
     pub fn describe(self) -> &'static str {
         match self {
-            Self::PackageJson => "JSON",
+            Self::PackageJson | Self::PackageLock => "JSON",
             Self::CargoToml | Self::CargoLock => "TOML",
             Self::PlainText => "plain text",
         }
@@ -133,11 +152,17 @@ impl Format {
     #[must_use]
     pub fn field_description(self) -> &'static str {
         match self {
-            Self::PackageJson => "\"version\"",
+            Self::PackageJson | Self::PackageLock => "\"version\"",
             Self::CargoToml => "[package].version",
             Self::CargoLock => "[[package]].version",
             Self::PlainText => "version",
         }
+    }
+
+    /// Whether this format is a lock file rather than a manifest.
+    #[must_use]
+    pub fn is_lock(self) -> bool {
+        matches!(self, Self::CargoLock | Self::PackageLock)
     }
 
     /// Reads the version recorded in `contents`.
@@ -161,6 +186,7 @@ impl Format {
             }
             Self::CargoToml => read_cargo_version(file, contents)?,
             Self::CargoLock => read_cargo_lock_version(file, contents)?,
+            Self::PackageLock => read_package_lock_version(file, contents)?,
             Self::PlainText => contents.trim().to_owned(),
         };
 
@@ -210,6 +236,7 @@ impl Format {
             }
             Self::CargoToml => write_cargo_version(file, contents, version),
             Self::CargoLock => write_cargo_lock_version(file, contents, version),
+            Self::PackageLock => write_package_lock_version(file, contents, version),
             // The version is the whole file, so a trailing newline is the only
             // formatting there is to preserve.
             Self::PlainText => Ok(format!("{version}\n")),
@@ -282,6 +309,65 @@ fn write_cargo_version(
     *slot.decor_mut() = decor;
 
     Ok(doc.to_string())
+}
+
+/// The path to the root package's entry, from lockfile version 2 onwards.
+const NPM_ROOT_PACKAGE: &[&str] = &["packages", ""];
+
+/// Reads the version an npm lock file records for the project itself.
+fn read_package_lock_version(file: &str, contents: &str) -> Result<String, VersionFileError> {
+    let root = find_json_version(contents, &[]).ok_or_else(|| VersionFileError::MissingField {
+        file: file.to_owned(),
+        field: "\"version\"".to_owned(),
+    })?;
+    let root = &contents[root];
+
+    // Version 1 has no `packages` map. Where one exists both records describe
+    // the same project, so a disagreement is a corrupt file rather than a
+    // question to answer by preferring one of them.
+    if let Some(nested) = find_json_version(contents, NPM_ROOT_PACKAGE) {
+        let nested = &contents[nested];
+        if nested != root {
+            return Err(VersionFileError::InconsistentLock {
+                file: file.to_owned(),
+                root: root.to_owned(),
+                nested: nested.to_owned(),
+            });
+        }
+    }
+
+    Ok(root.to_owned())
+}
+
+/// Rewrites every place an npm lock file records the project's own version.
+fn write_package_lock_version(
+    file: &str,
+    contents: &str,
+    version: &Version,
+) -> Result<String, VersionFileError> {
+    // Reading first rejects a lock with no version, or with two that already
+    // disagree, before any mutation is attempted.
+    read_package_lock_version(file, contents)?;
+
+    let mut spans =
+        vec![
+            find_json_version(contents, &[]).ok_or_else(|| VersionFileError::MissingField {
+                file: file.to_owned(),
+                field: "\"version\"".to_owned(),
+            })?,
+        ];
+    if let Some(nested) = find_json_version(contents, NPM_ROOT_PACKAGE) {
+        spans.push(nested);
+    }
+
+    // Splicing from the end keeps the earlier spans' offsets valid.
+    spans.sort_by_key(|span| std::cmp::Reverse(span.start));
+    let mut out = contents.to_owned();
+    for span in spans {
+        out.replace_range(span, &version.to_string());
+    }
+
+    Ok(out)
 }
 
 /// Reads the version of the package this lock file was generated for.
@@ -394,9 +480,22 @@ fn parse_cargo(file: &str, contents: &str) -> Result<DocumentMut, VersionFileErr
 /// or any other object is never mistaken for the manifest's own version. Only a
 /// string value at depth 1 qualifies.
 fn find_package_json_version(contents: &str) -> Option<Range<usize>> {
+    find_json_version(contents, &[])
+}
+
+/// Locates a `version` string nested under `path` in a JSON document.
+///
+/// An empty path means the root object. Following the path matters rather than
+/// counting depth: an npm lock file puts the project's own version at
+/// `packages[""].version` and every dependency's at
+/// `packages["node_modules/…"].version`, which sit at the same depth and differ
+/// only by which key contains them.
+fn find_json_version(contents: &str, path: &[&str]) -> Option<Range<usize>> {
     let bytes = contents.as_bytes();
     let mut i = 0;
     let mut depth: i32 = 0;
+    // How many leading segments of `path` the current position sits inside.
+    let mut matched = 0usize;
 
     while i < bytes.len() {
         match bytes[i] {
@@ -406,6 +505,11 @@ fn find_package_json_version(contents: &str) -> Option<Range<usize>> {
             }
             b'}' | b']' => {
                 depth -= 1;
+                // Leaving a container the path had entered un-matches it.
+                let inside = usize::try_from(depth.max(0)).ok()?;
+                if inside <= matched {
+                    matched = inside.saturating_sub(1);
+                }
                 i += 1;
             }
             b'"' => {
@@ -414,17 +518,25 @@ fn find_package_json_version(contents: &str) -> Option<Range<usize>> {
                 let after = span.end + 1;
                 let next = skip_whitespace(bytes, after);
 
-                // A string followed by ':' is a key. Only root-object keys are
-                // candidates, and the root object puts its keys at depth 1.
-                if next < bytes.len() && bytes[next] == b':' && depth == 1 {
+                // A string followed by ':' is a key. Keys of the container the
+                // path has reached sit one level below the segments matched.
+                let key_depth = i32::try_from(matched).ok()? + 1;
+                if next < bytes.len() && bytes[next] == b':' && depth == key_depth {
+                    let key = &contents[span.clone()];
                     let value_start = skip_whitespace(bytes, next + 1);
-                    if &contents[span.clone()] == "version" {
+
+                    if matched < path.len() {
+                        if key == path[matched] {
+                            matched += 1;
+                        }
+                    } else if key == "version" {
                         if value_start < bytes.len() && bytes[value_start] == b'"' {
                             return string_span(bytes, value_start);
                         }
                         // A non-string version is not something to rewrite.
                         return None;
                     }
+
                     i = value_start;
                 } else {
                     i = after;
@@ -598,6 +710,113 @@ serde = \"1\"
         );
         assert!(out.contains("serde = \"1\""));
         assert_eq!(out, src.replace("0.4.2", "0.5.0"));
+    }
+
+    /// npm's own output, not a hand-written approximation: these prove vump
+    /// agrees with npm rather than with itself. See `testdata/README.md`.
+    const NPM_LOCKS: [(u8, &str); 3] = [
+        (1, include_str!("testdata/npm-lock-v1.json")),
+        (2, include_str!("testdata/npm-lock-v2.json")),
+        (3, include_str!("testdata/npm-lock-v3.json")),
+    ];
+
+    #[test]
+    fn reads_the_project_version_from_every_npm_lock_format() {
+        for (lockfile_version, contents) in NPM_LOCKS {
+            assert_eq!(
+                Format::PackageLock
+                    .read("package-lock.json", contents)
+                    .unwrap(),
+                v("1.2.3"),
+                "lockfileVersion {lockfile_version}"
+            );
+        }
+    }
+
+    #[test]
+    fn writes_every_place_an_npm_lock_records_the_project_version() {
+        for (lockfile_version, contents) in NPM_LOCKS {
+            let out = Format::PackageLock
+                .write("package-lock.json", contents, &v("2.0.0"))
+                .unwrap();
+
+            // Reading back is the check that matters: it fails if the two
+            // records were left disagreeing.
+            assert_eq!(
+                Format::PackageLock.read("package-lock.json", &out).unwrap(),
+                v("2.0.0"),
+                "lockfileVersion {lockfile_version}"
+            );
+            assert!(
+                !out.contains("\"1.2.3\""),
+                "lockfileVersion {lockfile_version} kept the old version:\n{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn npm_lock_ignores_dependency_versions() {
+        // Version 2 records the dependency's version twice, under `packages`
+        // and again under `dependencies`, at the same depth as the project's
+        // own entry. Only the path distinguishes them.
+        for (lockfile_version, contents) in NPM_LOCKS {
+            let out = Format::PackageLock
+                .write("package-lock.json", contents, &v("2.0.0"))
+                .unwrap();
+
+            assert_eq!(
+                out.matches("\"2.1.3\"").count(),
+                contents.matches("\"2.1.3\"").count(),
+                "lockfileVersion {lockfile_version} disturbed a dependency:\n{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_npm_lock_stays_valid_json() {
+        for (lockfile_version, contents) in NPM_LOCKS {
+            let out = Format::PackageLock
+                .write("package-lock.json", contents, &v("2.0.0"))
+                .unwrap();
+            let parsed: serde_json::Value = serde_json::from_str(&out)
+                .unwrap_or_else(|e| panic!("lockfileVersion {lockfile_version} broke: {e}"));
+            assert_eq!(parsed["version"], "2.0.0");
+        }
+    }
+
+    #[test]
+    fn an_npm_lock_recording_two_different_versions_is_refused() {
+        // npm writes both records together, so a disagreement is a corrupt
+        // file rather than a question to settle by preferring one.
+        let src = r#"{
+  "name": "demo",
+  "version": "1.2.3",
+  "lockfileVersion": 3,
+  "packages": {
+    "": {
+      "name": "demo",
+      "version": "1.2.2"
+    }
+  }
+}"#;
+        let err = Format::PackageLock
+            .read("package-lock.json", src)
+            .unwrap_err();
+        assert!(
+            matches!(err, VersionFileError::InconsistentLock { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn an_npm_lock_is_recognized_by_name() {
+        assert_eq!(
+            Format::detect("package-lock.json"),
+            Some(Format::PackageLock)
+        );
+        // yarn and pnpm record no version for the project itself.
+        assert_eq!(Format::detect("yarn.lock"), None);
+        assert_eq!(Format::detect("pnpm-lock.yaml"), None);
     }
 
     /// A lock file as Cargo writes one: fetched packages carry a `source`, the

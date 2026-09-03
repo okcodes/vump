@@ -77,12 +77,13 @@ command with a hidden fork.
 A version file is any file that records the project's version. Detection is by
 filename:
 
-| Filename       | Format     | Location of the version                  |
-| -------------- | ---------- | ---------------------------------------- |
-| `package.json` | JSON       | `.version`                               |
-| `Cargo.toml`   | TOML       | `[package].version`                      |
-| `Cargo.lock`   | TOML       | the sole `[[package]]` with no `source`  |
-| `VERSION`      | plain text | entire file contents                     |
+| Filename            | Format     | Location of the version                 |
+| ------------------- | ---------- | --------------------------------------- |
+| `package.json`      | JSON       | `.version`                              |
+| `package-lock.json` | JSON       | `.version`, and `.packages[""].version` |
+| `Cargo.toml`        | TOML       | `[package].version`                     |
+| `Cargo.lock`        | TOML       | the sole `[[package]]` with no `source` |
+| `VERSION`           | plain text | entire file contents                    |
 
 **Writes must preserve the rest of the file byte-for-byte.** Update the version
 field in place rather than parsing and re-serializing: key order, indentation,
@@ -98,9 +99,10 @@ formats come first.
 ### Lock files
 
 A lock file that records the project's own version is a version file by the
-definition above, and is tracked like any other. `Cargo.lock` qualifies: Cargo
-writes the locked crate's version into it, and `cargo build --locked` rejects a
-tree where the two disagree.
+definition above, and is tracked like any other. `Cargo.lock` and
+`package-lock.json` qualify: each records the version of the project it locks,
+and `cargo build --locked` and `npm ci` both reject a tree where a lock and its
+manifest disagree.
 
 This does not weaken the non-goal. Resolving dependencies is a package
 manager's job and vump never does it; restating a version vump has just written
@@ -112,11 +114,19 @@ access and no knowledge of the dependency graph?**
 pins its workspace at a placeholder precisely so a bump does not churn the file
 — so they never go stale from a bump and are not tracked.
 
-The entry to write is the sole `[[package]]` carrying no `source`, since Cargo
-records one for everything it fetched. This makes the lock self-describing: it
-needs no manifest to interpret. A workspace has several such entries, at which
-point the lock cannot say which project a version belongs to, and it is refused
-rather than guessed at.
+In `Cargo.lock` the entry to write is the sole `[[package]]` carrying no
+`source`, since Cargo records one for everything it fetched. This makes the
+lock self-describing: it needs no manifest to interpret. A workspace has
+several such entries, at which point the lock cannot say which project a
+version belongs to, and it is refused rather than guessed at.
+
+An npm lock records the version at the top level, and from `lockfileVersion` 2
+onwards again under `packages[""]`. Both are written, because `npm ci` reads
+the second. Locating them follows the key path rather than counting depth: a
+dependency's version sits at the same depth as the project's own and differs
+only by which key contains it. npm writes both records together, so finding
+them already disagreeing means the file is corrupt, and it is refused rather
+than settled by preferring one.
 
 **A lock file that records the version but is not declared is refused before
 anything is written**, naming the file to add. Writing the manifest alone would

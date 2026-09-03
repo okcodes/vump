@@ -822,6 +822,88 @@ fn set_repairs_a_manifest_and_lock_that_disagree() {
     assert_eq!(fx.run(&["check", "1.2.3"]).code, 0);
 }
 
+/// npm's own output, shared with the unit tests. See its `testdata/README.md`.
+const NPM_LOCK: &str = include_str!("../src/domain/testdata/npm-lock-v3.json");
+
+const NPM_PROJECT: &str = "files = [\"package.json\", \"package-lock.json\"]\n";
+
+#[test]
+fn a_bump_moves_the_npm_lock_in_the_same_commit() {
+    let fx = Fixture::new()
+        .write("vump.toml", NPM_PROJECT)
+        .write("package.json", "{\"name\":\"demo\",\"version\":\"1.2.3\"}")
+        .write("package-lock.json", NPM_LOCK)
+        .with_git();
+
+    let run = fx.run(&["minor", "--tag"]);
+    assert_eq!(run.code, 0, "{}", run.output());
+
+    let lock = fx.read("package-lock.json");
+    // Both records move: `npm ci` reads the one under `packages`.
+    assert_eq!(lock.matches("\"1.3.0\"").count(), 2, "{lock}");
+    assert!(!lock.contains("\"1.2.3\""), "{lock}");
+    assert_eq!(fx.tags(), ["v1.3.0"]);
+    assert_eq!(fx.porcelain(), "", "the bump left work undone");
+}
+
+#[test]
+fn a_bump_leaves_npm_dependency_versions_alone() {
+    let fx = Fixture::new()
+        .write("vump.toml", NPM_PROJECT)
+        .write("package.json", "{\"name\":\"demo\",\"version\":\"1.2.3\"}")
+        .write("package-lock.json", NPM_LOCK);
+
+    assert_eq!(fx.run(&["patch", "--no-git"]).code, 0);
+    assert!(fx.read("package-lock.json").contains("\"2.1.3\""));
+}
+
+#[test]
+fn an_undeclared_npm_lock_stops_the_run_before_anything_happens() {
+    let fx = Fixture::new()
+        .write("vump.toml", "files = [\"package.json\"]\n")
+        .write("package.json", "{\"name\":\"demo\",\"version\":\"1.2.3\"}")
+        .write("package-lock.json", NPM_LOCK)
+        .with_git();
+
+    let run = fx.run(&["patch", "--tag"]);
+
+    assert_eq!(run.code, 3, "{}", run.output());
+    assert!(
+        run.output().contains("package-lock.json"),
+        "{}",
+        run.output()
+    );
+    assert!(fx.tags().is_empty());
+    assert_eq!(fx.porcelain(), "");
+}
+
+#[test]
+fn check_verifies_the_npm_lock_too() {
+    let fx = Fixture::new()
+        .write("vump.toml", NPM_PROJECT)
+        .write("package.json", "{\"name\":\"demo\",\"version\":\"9.9.9\"}")
+        .write("package-lock.json", NPM_LOCK);
+
+    let run = fx.run(&["check", "9.9.9"]);
+    assert_ne!(run.code, 0, "{}", run.output());
+    assert!(
+        run.output().contains("package-lock.json"),
+        "{}",
+        run.output()
+    );
+}
+
+#[test]
+fn a_yarn_lock_is_never_demanded() {
+    // Yarn pins its workspace at a placeholder, so a bump cannot stale it.
+    let fx = Fixture::new()
+        .write("vump.toml", "files = [\"package.json\"]\n")
+        .write("package.json", "{\"name\":\"demo\",\"version\":\"1.2.3\"}")
+        .write("yarn.lock", "# yarn lockfile v1\n");
+
+    assert_eq!(fx.run(&["patch", "--no-git"]).code, 0);
+}
+
 #[test]
 fn a_workspace_lock_above_a_member_is_left_alone() {
     // A known limit, recorded in BACKLOG.md: a workspace lock covers several
