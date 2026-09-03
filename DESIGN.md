@@ -266,9 +266,11 @@ It does not refuse to move backwards. The reasoning matches `self update --to`:
 a version written out by hand is consent, and refusing would leave no way to
 undo a mistaken bump.
 
-A plan produced by `set` carries no single "current" version when the files
-disagree — reporting one would misdescribe the others — so each file's own
-previous version travels in the per-file changes instead.
+`set` produces no single "current" version at all. When the files disagree
+there is not one, and reporting the first would misdescribe the rest, so each
+file's own previous version travels in the per-file changes. A shared version,
+where the files happen to agree, is derived from those rather than stored
+beside them.
 
 Setting the version the files already record is reported as success with
 nothing done. Git refuses an empty commit, so a run that would produce no
@@ -333,9 +335,11 @@ Rules that keep the boundaries real:
   needs to read a file or know the time, the design is wrong.
 - `app` depends on `domain` and `ports`, never on `adapters`. Use cases are
   constructed with port implementations supplied by `cli`.
-- A `BumpPlan` value produced by `domain` is the single input to both the
-  human renderer, the JSON renderer, and `--dry-run`. Those three must not
-  compute anything themselves.
+- A single `ChangeSet` value is the input to the human renderer, the JSON
+  renderer, and `--dry-run` alike. Those three must not compute anything
+  themselves. Bumping and setting differ only in how they reach a target
+  version; what they produce is the same type, so neither has to describe
+  itself in the other's terms.
 
 ### Adapter notes
 
