@@ -23,6 +23,8 @@ pub enum Format {
     PackageJson,
     /// Cargo manifest; the version lives at `[package].version`.
     CargoToml,
+    /// `MSBuild` project; the version lives at `<Project><PropertyGroup><Version>`.
+    CsProj,
     /// A file whose entire contents are the version.
     PlainText,
 }
@@ -63,6 +65,9 @@ impl Tracked {
             "package.json" => Some(Self::Manifest(Format::PackageJson)),
             "Cargo.toml" => Some(Self::Manifest(Format::CargoToml)),
             "VERSION" => Some(Self::Manifest(Format::PlainText)),
+            // The only recognized name that is an extension rather than a
+            // whole filename: a C# project is named after its assembly.
+            _ if has_extension(file_name, "csproj") => Some(Self::Manifest(Format::CsProj)),
             "Cargo.lock" => Some(Self::Lock(LockFile::Cargo)),
             "package-lock.json" => Some(Self::Lock(LockFile::Npm)),
             _ => None,
@@ -137,6 +142,15 @@ pub enum VersionFileError {
         nested: String,
     },
 
+    /// The file records the version in more than one place.
+    #[error("{file} records {field} more than once; vump cannot tell which one governs")]
+    AmbiguousField {
+        /// The file being read.
+        file: String,
+        /// A human description of the repeated field.
+        field: String,
+    },
+
     /// A lock file is tracked, but nothing declared with it names a package.
     #[error(
         "{file} is tracked, but no manifest declared alongside it names a package; \
@@ -163,6 +177,7 @@ impl Format {
         match self {
             Self::PackageJson => "JSON",
             Self::CargoToml => "TOML",
+            Self::CsProj => "XML",
             Self::PlainText => "plain text",
         }
     }
@@ -173,6 +188,7 @@ impl Format {
         match self {
             Self::PackageJson => "\"version\"",
             Self::CargoToml => "[package].version",
+            Self::CsProj => "<Version>",
             Self::PlainText => "version",
         }
     }
@@ -197,6 +213,10 @@ impl Format {
                 contents[span].to_owned()
             }
             Self::CargoToml => read_cargo_version(file, contents)?,
+            Self::CsProj => match find_csproj_version(file, contents)? {
+                Some(span) => contents[span].to_owned(),
+                None => String::new(),
+            },
             Self::PlainText => contents.trim().to_owned(),
         };
 
@@ -229,6 +249,15 @@ impl Format {
                 Ok(splice(contents, &[span], version))
             }
             Self::CargoToml => write_cargo_version(file, contents, version),
+            Self::CsProj => {
+                let span = find_csproj_version(file, contents)?.ok_or_else(|| {
+                    VersionFileError::MissingField {
+                        file: file.to_owned(),
+                        field: self.field_description().to_owned(),
+                    }
+                })?;
+                Ok(splice(contents, &[span], version))
+            }
             // The version is the whole file, so a trailing newline is the only
             // formatting there is to preserve.
             Self::PlainText => Ok(format!("{version}\n")),
@@ -318,6 +347,141 @@ fn splice(contents: &str, spans: &[Range<usize>], version: &Version) -> String {
         out.replace_range(span, &version.to_string());
     }
     out
+}
+
+/// Whether `file_name` ends in `.<extension>`, ignoring case.
+///
+/// Windows filesystems are case-insensitive, so a project checked out there and
+/// read here must classify the same either way.
+fn has_extension(file_name: &str, extension: &str) -> bool {
+    file_name
+        .rsplit_once('.')
+        .is_some_and(|(stem, found)| !stem.is_empty() && found.eq_ignore_ascii_case(extension))
+}
+
+/// Locates the text of the `<Version>` property in an `MSBuild` project file.
+///
+/// Matching follows the element path — `Project` then `PropertyGroup` then
+/// `Version` — rather than searching for the word, because a project file is
+/// full of other versions. `<PackageReference Version="13.0.3" />` carries one
+/// as an attribute, and `<VersionPrefix>`, `<AssemblyVersion>` and
+/// `<FileVersion>` are separate properties a bump must leave alone: the last
+/// two take four numeric parts and cannot hold a pre-release at all.
+///
+/// # Errors
+///
+/// Returns [`VersionFileError::AmbiguousField`] when several property groups
+/// declare a version, since they are alternatives and vump cannot tell which
+/// condition will hold.
+fn find_csproj_version(
+    file: &str,
+    contents: &str,
+) -> Result<Option<Range<usize>>, VersionFileError> {
+    const WANTED: [&str; 3] = ["Project", "PropertyGroup", "Version"];
+
+    let bytes = contents.as_bytes();
+    let mut path: Vec<&str> = Vec::new();
+    let mut found: Option<Range<usize>> = None;
+    let mut i = 0;
+
+    while let Some(open) = seek(bytes, i, b'<') {
+        let rest = &bytes[open..];
+
+        // Comments, CDATA and processing instructions carry no elements.
+        for (start, end) in [
+            (b"<!--".as_slice(), b"-->".as_slice()),
+            (b"<![CDATA[".as_slice(), b"]]>".as_slice()),
+            (b"<?".as_slice(), b"?>".as_slice()),
+        ] {
+            if rest.starts_with(start) {
+                i = seek_seq(bytes, open, end).map_or(bytes.len(), |at| at + end.len());
+                break;
+            }
+        }
+        if i > open {
+            continue;
+        }
+
+        let Some(after) = tag_end(bytes, open) else {
+            break;
+        };
+
+        if rest.starts_with(b"</") {
+            path.pop();
+            i = after;
+            continue;
+        }
+
+        let name_start = open + 1;
+        let name_end = name_start
+            + bytes[name_start..after]
+                .iter()
+                .position(|b| b.is_ascii_whitespace() || *b == b'>' || *b == b'/')
+                .unwrap_or(0);
+        let name = &contents[name_start..name_end];
+
+        // A self-closing element has no text, and encloses nothing.
+        if bytes[after - 2] == b'/' {
+            i = after;
+            continue;
+        }
+
+        path.push(name);
+        if path.len() == WANTED.len()
+            && path
+                .iter()
+                .zip(WANTED)
+                .all(|(seen, want)| seen.eq_ignore_ascii_case(want))
+        {
+            let text_end = seek(bytes, after, b'<').unwrap_or(bytes.len());
+            if found.is_some() {
+                return Err(VersionFileError::AmbiguousField {
+                    file: file.to_owned(),
+                    field: "<Version>".to_owned(),
+                });
+            }
+            found = Some(after..text_end);
+        }
+
+        i = after;
+    }
+
+    Ok(found)
+}
+
+/// The offset just past the `>` closing the tag starting at `open`.
+///
+/// Attribute values may contain `>`, so quoted spans are skipped.
+fn tag_end(bytes: &[u8], open: usize) -> Option<usize> {
+    let mut i = open + 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            quote @ (b'"' | b'\'') => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != quote {
+                    i += 1;
+                }
+            }
+            b'>' => return Some(i + 1),
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+fn seek(bytes: &[u8], from: usize, byte: u8) -> Option<usize> {
+    bytes[from.min(bytes.len())..]
+        .iter()
+        .position(|b| *b == byte)
+        .map(|at| from + at)
+}
+
+fn seek_seq(bytes: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
+    bytes[from.min(bytes.len())..]
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .map(|at| from + at)
 }
 
 /// Locates the `[package].version` value in a Cargo manifest.
@@ -859,6 +1023,103 @@ serde = \"1\"
         (2, include_str!("testdata/npm-lock-v2.json")),
         (3, include_str!("testdata/npm-lock-v3.json")),
     ];
+
+    /// dotnet's own output, with a version added. See `testdata/README.md`.
+    const CSPROJ: &str = include_str!("testdata/Demo.csproj");
+
+    #[test]
+    fn reads_the_version_property_of_a_project_file() {
+        assert_eq!(
+            Format::CsProj.read("Demo.csproj", CSPROJ).unwrap(),
+            v("1.2.3")
+        );
+    }
+
+    #[test]
+    fn csproj_ignores_every_other_version_in_the_file() {
+        let out = Format::CsProj
+            .write("Demo.csproj", CSPROJ, &v("2.0.0-rc.1"))
+            .unwrap();
+
+        assert!(out.contains("<Version>2.0.0-rc.1</Version>"), "{out}");
+        // AssemblyVersion takes four numeric parts and cannot hold a
+        // pre-release; a PackageReference carries its version as an attribute.
+        assert!(
+            out.contains("<AssemblyVersion>1.2.3.0</AssemblyVersion>"),
+            "{out}"
+        );
+        assert!(out.contains(r#"Version="13.0.3""#), "{out}");
+    }
+
+    #[test]
+    fn csproj_preserves_the_byte_order_mark_and_everything_else() {
+        let out = Format::CsProj
+            .write("Demo.csproj", CSPROJ, &v("2.0.0"))
+            .unwrap();
+
+        // dotnet writes project files with a BOM, and rewriting one must not
+        // silently change its encoding.
+        assert!(out.starts_with('\u{feff}'), "byte-order mark lost");
+        assert_eq!(out, CSPROJ.replace("<Version>1.2.3<", "<Version>2.0.0<"));
+    }
+
+    #[test]
+    fn a_project_file_is_recognized_by_its_extension() {
+        // The only recognized name that is an extension: a C# project is named
+        // after its assembly.
+        for name in ["Demo.csproj", "Some.Long.Name.csproj", "Demo.CSPROJ"] {
+            assert_eq!(
+                Tracked::detect(name),
+                Some(Tracked::Manifest(Format::CsProj)),
+                "{name}"
+            );
+        }
+        assert_eq!(Tracked::detect("csproj"), None);
+        assert_eq!(Tracked::detect(".csproj"), None);
+        assert_eq!(Tracked::detect("Demo.fsproj"), None);
+    }
+
+    #[test]
+    fn a_version_in_a_comment_or_an_item_group_is_not_the_project_version() {
+        let src = "<Project Sdk=\"Microsoft.NET.Sdk\">\n\
+                   <!-- <PropertyGroup><Version>9.9.9</Version></PropertyGroup> -->\n\
+                   <ItemGroup><Version>8.8.8</Version></ItemGroup>\n\
+                   <PropertyGroup><Version>1.0.0</Version></PropertyGroup>\n\
+                   </Project>\n";
+
+        assert_eq!(Format::CsProj.read("Demo.csproj", src).unwrap(), v("1.0.0"));
+    }
+
+    #[test]
+    fn a_project_file_with_no_version_says_so() {
+        // dotnet new writes no <Version>; VersionPrefix and VersionSuffix are
+        // different properties vump does not split.
+        let src = "<Project Sdk=\"Microsoft.NET.Sdk\">\n\
+                   <PropertyGroup><VersionPrefix>1.0.0</VersionPrefix></PropertyGroup>\n\
+                   </Project>\n";
+
+        let err = Format::CsProj.read("Demo.csproj", src).unwrap_err();
+        let VersionFileError::MissingField { field, .. } = &err else {
+            panic!("got {err:?}");
+        };
+        assert_eq!(field, "<Version>");
+    }
+
+    #[test]
+    fn two_conditional_versions_are_refused_rather_than_picked_between() {
+        // They are alternatives, and which condition holds is MSBuild's answer
+        // to give, not vump's to guess.
+        let src = "<Project>\n\
+                   <PropertyGroup Condition=\"'$(CI)'=='true'\"><Version>1.0.0</Version></PropertyGroup>\n\
+                   <PropertyGroup><Version>2.0.0</Version></PropertyGroup>\n\
+                   </Project>\n";
+
+        let err = Format::CsProj.read("Demo.csproj", src).unwrap_err();
+        assert!(
+            matches!(err, VersionFileError::AmbiguousField { .. }),
+            "got {err:?}"
+        );
+    }
 
     #[test]
     fn reads_the_project_version_from_every_npm_lock_format() {

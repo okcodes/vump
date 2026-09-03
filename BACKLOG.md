@@ -23,6 +23,24 @@ agreed, at which point it is ranked by value.
 
 Worth recording. None have an agreed problem statement yet.
 
+### Other MSBuild project files, and a shared version
+
+`*.csproj` is tracked. `*.fsproj` and `*.vbproj` are the same format with a
+different extension, and `Directory.Build.props` is where a solution with many
+projects usually keeps one shared `<Version>`.
+
+The first two are a one-line change and are left out only because nothing here
+uses F# or VB. The props file is not: it governs every project beneath it, so
+tracking it means deciding what happens when a project also declares its own
+version, and that needs a real solution in hand.
+
+### Python projects
+
+`pyproject.toml` holds `[project].version`, which is the same in-place TOML
+edit vump already performs. What is undecided is `uv`: it keeps a `uv.lock`
+that records the project's own version, so the lock question arrives with it,
+and whether `uv` rewrites more of that file than the version is unverified.
+
 ### npm workspaces
 
 A Cargo workspace's shared lock is now written per member, matched by the
@@ -132,6 +150,18 @@ Running the fix leaves the tree dirty, which is itself refused.
 
 Where a repair is genuinely needed, `vump set <version>` writes every tracked
 file and requires no prior agreement between them. That is the resume command.
+
+### Tracking yarn.lock or pnpm-lock.yaml
+
+Neither records the project's own version, so a bump cannot make either stale.
+Checked against both tools rather than assumed: with `"version": "1.2.3"` in
+`package.json`, a generated `yarn.lock` and `pnpm-lock.yaml` each contain zero
+occurrences of it. Yarn Berry pins its own workspace entry at a placeholder for
+the same reason.
+
+They record a dependency graph, and a version bump does not change one. An
+earlier advisory named them anyway, which meant telling people to run an
+install that would change nothing.
 
 ### A saved plan-then-apply workflow
 

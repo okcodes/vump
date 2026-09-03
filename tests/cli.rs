@@ -1105,3 +1105,59 @@ fn an_ordinary_annotated_tag_needs_no_remark() {
     );
     assert!(!run.stdout.contains("(annotated)"), "{}", run.stdout);
 }
+
+// ─── C# projects ─────────────────────────────────────────────────────────────
+
+/// dotnet's own output, shared with the unit tests.
+const CSPROJ: &str = include_str!("../src/domain/testdata/Demo.csproj");
+
+#[test]
+fn a_csproj_is_tracked_by_its_extension() {
+    let fx = Fixture::new()
+        .write("vump.toml", "files = [\"Demo.csproj\"]\n")
+        .write("Demo.csproj", CSPROJ);
+
+    let run = fx.run(&["minor", "--no-git"]);
+    assert_eq!(run.code, 0, "{}", run.output());
+
+    let out = fx.read("Demo.csproj");
+    assert!(out.contains("<Version>1.3.0</Version>"), "{out}");
+    // Everything else a project file calls a version stays put.
+    assert!(
+        out.contains("<AssemblyVersion>1.2.3.0</AssemblyVersion>"),
+        "{out}"
+    );
+    assert!(out.contains(r#"Version="13.0.3""#), "{out}");
+    assert!(out.starts_with('\u{feff}'), "byte-order mark lost");
+}
+
+#[test]
+fn a_csproj_moves_in_step_with_other_tracked_files() {
+    let fx = Fixture::new()
+        .write("vump.toml", "files = [\"VERSION\", \"Demo.csproj\"]\n")
+        .write("VERSION", "1.2.3\n")
+        .write("Demo.csproj", CSPROJ);
+
+    assert_eq!(fx.run(&["alpha", "--from", "patch", "--no-git"]).code, 0);
+    assert_eq!(fx.read("VERSION"), "1.2.4-alpha.0\n");
+    assert!(
+        fx.read("Demo.csproj")
+            .contains("<Version>1.2.4-alpha.0</Version>")
+    );
+    assert_eq!(fx.run(&["check", "1.2.4-alpha.0"]).code, 0);
+}
+
+#[test]
+fn init_finds_a_csproj_and_skips_one_with_no_version() {
+    let fx = Fixture::new().write("src/Demo/Demo.csproj", CSPROJ).write(
+        "src/Tools/Tools.csproj",
+        "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup></PropertyGroup></Project>\n",
+    );
+
+    assert_eq!(fx.run(&["init"]).code, 0);
+    let config = fx.read("vump.toml");
+
+    assert!(config.contains("src/Demo/Demo.csproj"), "{config}");
+    // A project that declares no version cannot be kept in step with one.
+    assert!(!config.contains("Tools.csproj"), "{config}");
+}
