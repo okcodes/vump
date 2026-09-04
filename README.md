@@ -154,13 +154,18 @@ order, indentation, and comments elsewhere in the file survive untouched.
 | Filename | Version location |
 | --- | --- |
 | `package.json` | top-level `version` |
+| `*.csproj`, `*.fsproj`, `*.vbproj` | `<Version>` in a `<PropertyGroup>` |
 | `package-lock.json` | top-level `version`, and the root `packages` entry |
 | `Cargo.toml` | `[package].version` |
 | `Cargo.lock` | the `[[package]]` entry for this crate |
 | `VERSION` | the whole file |
 
 A `version` nested under `dependencies` is never mistaken for the project's
-own, and neither is a locked dependency's.
+own, and neither is a locked dependency's. In a `.csproj`, neither is a
+`<PackageReference Version="...">`, an `<AssemblyVersion>` (four numeric parts,
+never a pre-release), nor a `<VersionPrefix>`. Only `<Version>` moves, and a
+project file declaring it in two conditional groups is reported rather than
+guessed at.
 
 ### Lock files move with the manifest
 
@@ -381,6 +386,10 @@ cargo test
 ```
 
 CI runs the same three on Linux, macOS and Windows.
+
+[`sandbox/`](sandbox) holds working projects — npm and C#, single- and
+multi-project — to run vump against by hand and to read as configuration
+examples. Git is off in all of them, because they share this repository.
 
 | Document | Holds |
 | --- | --- |

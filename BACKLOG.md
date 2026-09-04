@@ -23,6 +23,42 @@ agreed, at which point it is ranked by value.
 
 Worth recording. None have an agreed problem statement yet.
 
+### A shared version for a .NET solution
+
+`Directory.Build.props` is where a solution with many projects usually keeps
+one `<Version>`, inherited by every project beneath it. Reading it needs no new
+code — it is the same `MSBuild` XML.
+
+What is undecided is what happens when a project underneath also declares its
+own `<Version>`, which overrides the inherited one. Tracking both would mean
+vump writing two files that disagree by design. Needs a real solution in hand
+rather than a guess at which layer wins.
+
+### Deriving the version from git tags instead of files
+
+Tools like MinVer compute a .NET package version from the nearest git tag, so
+no file records it and nothing can fall out of sync.
+
+Not adopted, and not a competitor so much as the opposite trade. It needs git
+history at build time, which shallow CI checkouts and source tarballs do not
+have; it leaves a checked-out tree with no readable version; and it does not
+reach npm or Cargo, whose manifests must carry a version regardless — so a
+polyglot repository would need both models at once. Most of all it removes the
+second opinion: a mistyped tag becomes a correctly-built wrong version, with
+nothing left to check it against, which is the failure `vump check` exists to
+catch.
+
+Worth revisiting only for a repository that is .NET alone and does not publish
+source archives. `vump set "$(git describe --tags --abbrev=0)"` already covers
+deriving a version from a tag for anyone who wants that direction.
+
+### Python projects
+
+`pyproject.toml` holds `[project].version`, which is the same in-place TOML
+edit vump already performs. What is undecided is `uv`: it keeps a `uv.lock`
+that records the project's own version, so the lock question arrives with it,
+and whether `uv` rewrites more of that file than the version is unverified.
+
 ### npm workspaces
 
 A Cargo workspace's shared lock is now written per member, matched by the
@@ -132,6 +168,18 @@ Running the fix leaves the tree dirty, which is itself refused.
 
 Where a repair is genuinely needed, `vump set <version>` writes every tracked
 file and requires no prior agreement between them. That is the resume command.
+
+### Tracking yarn.lock or pnpm-lock.yaml
+
+Neither records the project's own version, so a bump cannot make either stale.
+Checked against both tools rather than assumed: with `"version": "1.2.3"` in
+`package.json`, a generated `yarn.lock` and `pnpm-lock.yaml` each contain zero
+occurrences of it. Yarn Berry pins its own workspace entry at a placeholder for
+the same reason.
+
+They record a dependency graph, and a version bump does not change one. An
+earlier advisory named them anyway, which meant telling people to run an
+install that would change nothing.
 
 ### A saved plan-then-apply workflow
 

@@ -12,3 +12,10 @@
 *.yaml      text eol=lf
 *.md        text eol=lf
 *.json      text eol=lf
+*.cs        text eol=lf
+*.csproj    text eol=lf
+*.js        text eol=lf
+
+# The sandbox exists to be read and experimented with, not to describe what
+# this repository is written in.
+sandbox/** linguist-vendored

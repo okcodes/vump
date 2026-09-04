@@ -1,0 +1,17 @@
+# Two C# projects released independently from one repository.
+#
+# Git is off throughout the sandbox — see ../../npm/single-project/vump.toml.
+
+[git]
+commit = false
+tag = false
+push = false
+tag_pattern = "{project}-v{new_version}"
+
+[[project]]
+name = "project-a"
+files = ["ProjectA/ProjectA.csproj"]
+
+[[project]]
+name = "project-b"
+files = ["ProjectB/ProjectB.csproj"]

@@ -1,0 +1,21 @@
+# Two npm packages released independently from one repository.
+#
+# They need distinguishable tags: sharing one pattern would collide the moment
+# both reach the same version, and a pushed tag would not say which package it
+# describes. One repository-wide template covers both.
+#
+# Git is off throughout the sandbox — see ../single-project/vump.toml.
+
+[git]
+commit = false
+tag = false
+push = false
+tag_pattern = "{project}-v{new_version}"
+
+[[project]]
+name = "project-a"
+files = ["project-a/package.json", "project-a/package-lock.json"]
+
+[[project]]
+name = "project-b"
+files = ["project-b/package.json", "project-b/package-lock.json"]

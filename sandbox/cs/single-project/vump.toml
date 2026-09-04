@@ -1,0 +1,15 @@
+# One C# project, versioned on its own.
+#
+# <Version> is the property `dotnet pack` names the package from, and the one
+# that reaches the assembly as its informational version. Nothing else in the
+# file moves — a <PackageReference Version="..."> belongs to a dependency, and
+# <AssemblyVersion> takes four numeric parts and cannot hold a pre-release.
+#
+# Git is off throughout the sandbox — see ../../npm/single-project/vump.toml.
+
+files = ["Demo/Demo.csproj"]
+
+[git]
+commit = false
+tag = false
+push = false

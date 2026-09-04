@@ -13,6 +13,7 @@ crate, ports and adapters.
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | How work flows: branches, commits, pull requests, releases. |
 | [`BACKLOG.md`](BACKLOG.md) | What is not built yet, and what was decided against. |
 | [`README.md`](README.md) | The user-facing manual. |
+| [`sandbox/`](sandbox) | Working projects per ecosystem, to try by hand and to read as examples. |
 
 Before changing behavior, read the relevant `DESIGN.md` section. Before
 building something new, check `BACKLOG.md` — it may already be decided against,

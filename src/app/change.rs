@@ -15,7 +15,7 @@ use crate::config::TagStyle;
 use crate::config::{GitSettings, Project};
 use crate::domain::TagPattern;
 use crate::domain::TransitionError;
-use crate::domain::version_file::Format;
+use crate::domain::version_file::Tracked;
 use crate::ports::Annotation;
 use crate::ports::{FileSystem, Vcs, VcsError};
 
@@ -310,9 +310,8 @@ pub fn apply(
 
     // The same pairing the read side uses: a shared workspace lock records
     // every member, and this project's manifests say which entries are its own.
-    let names =
+    let packages =
         crate::app::cargo_package_names(fs, root, changes.files.iter().map(|f| f.path.as_str()));
-    let scope = crate::app::lock_scope(&names);
 
     let mut written = Vec::with_capacity(changes.files.len());
     for file in &changes.files {
@@ -321,12 +320,14 @@ pub fn apply(
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or(file.path.as_str());
-        let format = Format::require(file_name).map_err(AppError::from)?;
+        let tracked = Tracked::require(file_name).map_err(AppError::from)?;
 
         let contents = fs.read(&absolute).map_err(AppError::from)?;
-        let updated = format
-            .write(&file.path, &contents, &changes.target, scope)
-            .map_err(AppError::from)?;
+        let updated = match tracked {
+            Tracked::Manifest(format) => format.write(&file.path, &contents, &changes.target),
+            Tracked::Lock(lock) => lock.write(&file.path, &contents, &changes.target, &packages),
+        }
+        .map_err(AppError::from)?;
         fs.write(&absolute, &updated).map_err(AppError::from)?;
 
         written.push(file.path.clone());

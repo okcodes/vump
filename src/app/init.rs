@@ -11,7 +11,7 @@ use std::path::Path;
 use thiserror::Error;
 
 use crate::config::{DEFAULT_COMMIT_MESSAGE, DEFAULT_TAG_MESSAGE, DEFAULT_TAG_PATTERN, FILE_NAME};
-use crate::domain::version_file::{Format, LockScope};
+use crate::domain::version_file::Tracked;
 use crate::ports::{FileSystem, FsError};
 
 /// How deep beneath the starting directory to look.
@@ -74,10 +74,9 @@ pub fn discover(fs: &dyn FileSystem, root: &Path) -> Vec<String> {
 
     // A lock file's entries are identified by the manifests declared with it,
     // so every manifest has to be in hand before anything can be judged.
-    let names = crate::app::cargo_package_names(fs, root, found.iter().map(String::as_str));
-    let scope = crate::app::lock_scope(&names);
+    let packages = crate::app::cargo_package_names(fs, root, found.iter().map(String::as_str));
 
-    found.retain(|path| readable(fs, root, path, scope));
+    found.retain(|path| readable(fs, root, path, &packages));
     found
 }
 
@@ -101,7 +100,7 @@ fn walk(fs: &dyn FileSystem, dir: &Path, prefix: &str, depth: usize, found: &mut
                 format!("{prefix}/{}", entry.name)
             };
             walk(fs, &dir.join(&entry.name), &child_prefix, depth + 1, found);
-        } else if Format::detect(&entry.name).is_some() {
+        } else if Tracked::detect(&entry.name).is_some() {
             found.push(if prefix.is_empty() {
                 entry.name
             } else {
@@ -117,18 +116,20 @@ fn walk(fs: &dyn FileSystem, dir: &Path, prefix: &str, depth: usize, found: &mut
 /// often carries no version, and a lock file naming none of the packages found
 /// beside it belongs to something else. Declaring any of them would produce a
 /// configuration that fails on every command it is used for.
-fn readable(fs: &dyn FileSystem, root: &Path, declared: &str, scope: LockScope<'_>) -> bool {
+fn readable(fs: &dyn FileSystem, root: &Path, declared: &str, packages: &[String]) -> bool {
     let absolute = crate::app::resolve(root, declared);
-    let Some(format) = absolute
+    let Some(tracked) = absolute
         .file_name()
         .and_then(|name| name.to_str())
-        .and_then(Format::detect)
+        .and_then(Tracked::detect)
     else {
         return false;
     };
 
-    fs.read(&absolute)
-        .is_ok_and(|contents| format.read(declared, &contents, scope).is_ok())
+    fs.read(&absolute).is_ok_and(|contents| match tracked {
+        Tracked::Manifest(format) => format.read(declared, &contents).is_ok(),
+        Tracked::Lock(lock) => lock.read(declared, &contents, packages).is_ok(),
+    })
 }
 
 /// Writes an initial configuration tracking every version file found.

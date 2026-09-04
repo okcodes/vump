@@ -11,3 +11,8 @@ against a package.json declaring `"version": "1.2.3"` and one dependency.
 `cargo-workspace.lock` is Cargo's output for a two-member workspace whose
 members hold different versions, alongside one fetched dependency. Regenerate
 with `cargo generate-lockfile`.
+
+`Demo.csproj` is `dotnet new classlib` output with a `<Version>` added, plus
+the traps a real project file carries: a UTF-8 byte-order mark, an
+`<AssemblyVersion>` that is four numeric parts and never a pre-release, and a
+`<PackageReference>` whose own version is an attribute.

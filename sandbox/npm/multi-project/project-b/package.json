@@ -1,0 +1,10 @@
+{
+  "name": "project-b",
+  "version": "2.5.0",
+  "private": true,
+  "description": "Project B of the multi-project npm sandbox",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  }
+}

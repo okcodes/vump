@@ -75,11 +75,14 @@ command with a hidden fork.
 ### Version files
 
 A version file is any file that records the project's version. Detection is by
-filename:
+filename, and the `MSBuild` project files are the only match on an extension
+rather than a whole name — a .NET project is named after the assembly it
+builds. The three extensions are one language each and one format.
 
 | Filename            | Format     | Location of the version                 |
 | ------------------- | ---------- | --------------------------------------- |
 | `package.json`      | JSON       | `.version`                              |
+| `*.csproj`, `*.fsproj`, `*.vbproj` | XML | `<Project><PropertyGroup><Version>` |
 | `package-lock.json` | JSON       | `.version`, and `.packages[""].version` |
 | `Cargo.toml`        | TOML       | `[package].version`                     |
 | `Cargo.lock`        | TOML       | the sole `[[package]]` with no `source` |
@@ -91,6 +94,15 @@ whitespace, and comments elsewhere in the file must survive untouched. A tool
 that reformats a `package.json` as a side effect of bumping it will not be
 tolerated in a repository, and correctness here is more important than the
 elegance of the parsing approach.
+
+A project file is full of other versions, and the one that moves is located by
+element path rather than by searching for the word. `<PackageReference
+Version="13.0.3" />` carries one as an attribute; `<VersionPrefix>` is a
+different property vump does not split; `<AssemblyVersion>` and `<FileVersion>`
+take four numeric parts and cannot hold a pre-release at all. Several
+`<Version>` properties in conditional groups are alternatives, so which one
+governs is MSBuild's answer to give and the file is refused rather than guessed
+at.
 
 Support for arbitrary formats via a declarative extraction spec (a path or
 pattern per file entry) is a plausible future direction, but the built-in

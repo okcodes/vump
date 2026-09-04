@@ -81,6 +81,11 @@ Keeping the documents true is part of the change, not follow-up work.
 | [`BACKLOG.md`](BACKLOG.md) | Something is proposed, deferred, or ruled out |
 | [`ENGINEERING.md`](ENGINEERING.md) | A standard changes, together with the example that motivated it |
 | [`CLAUDE.md`](CLAUDE.md) | The document map or the conventions in it change |
+| [`sandbox/`](sandbox) | A new ecosystem or configuration shape is supported |
+
+The sandbox projects share this repository, so every `vump.toml` in them keeps
+git off: a commit or tag made there lands here. Git behavior is covered by the
+end-to-end suite, which builds a throwaway repository per test.
 
 Two rules keep `DESIGN.md` and `BACKLOG.md` from drifting into each other:
 
