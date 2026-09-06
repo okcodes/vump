@@ -393,7 +393,7 @@ own stable code so callers can branch without matching strings:
 | Code | Meaning                                        |
 | ---- | ---------------------------------------------- |
 | 0    | Success                                        |
-| 1    | Generic / unexpected error                     |
+| 1    | Generic / unexpected error, a declined prompt, or `self status` finding an update |
 | 2    | Usage error (bad arguments)                    |
 | 3    | Configuration missing or invalid               |
 | 4    | Version mismatch (`check` failed)              |
@@ -401,6 +401,21 @@ own stable code so callers can branch without matching strings:
 | 6    | Working tree dirty                             |
 | 7    | Invalid version transition                     |
 | 8    | Git operation failed                           |
+| 9    | A release artifact could not be trusted        |
+| 10   | A release could not be obtained                |
+
+9 and 10 separate the two ways `self update` can fail to install. 9 means the
+downloaded artifact does not match its published checksums, or the release
+publishes none — that warrants looking into, since it means tampering or
+corruption. 10 means the release list was unreachable, the requested version
+does not exist, or this platform has no published binary for it — retrying, or
+naming a different version, may well succeed. Collapsing them into one generic
+failure would hide which reaction is the right one.
+
+`self status` deliberately reuses code 1 rather than introducing one of its
+own: a script that only wants to know whether to act does not need a third
+category between "nothing to do" and "something went wrong", and the human
+output already says which of the two happened.
 
 ## 6. Architecture
 

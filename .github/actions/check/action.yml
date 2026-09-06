@@ -1,5 +1,5 @@
 name: 'vump check'
-description: 'Verify all version files tracked by vump.toml match the given version. Exits 1 with a clear report if any file does not match.'
+description: 'Verify all version files tracked by vump.toml match the given version. Fails with a clear report if any file does not match.'
 
 inputs:
   version:

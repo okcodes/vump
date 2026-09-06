@@ -346,7 +346,7 @@ Exit codes are a stable contract:
 | Code | Meaning |
 | --- | --- |
 | 0 | Success |
-| 1 | Unexpected failure, or a guided run declined |
+| 1 | Unexpected failure, an interactive prompt declined, or `self status` reporting an update is available |
 | 2 | Usage error |
 | 3 | Configuration missing or invalid |
 | 4 | Version mismatch (`check` failed) |
