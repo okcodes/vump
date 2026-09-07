@@ -44,7 +44,7 @@ platform differences, not ordinary mistakes.
 vump versions itself with vump.
 
 ```bash
-vump patch --tag --push        # or: alpha, beta, rc, release
+vump patch --through push        # or: alpha, beta, rc, release
 ```
 
 Pushing the tag runs the release workflow, in this order:

@@ -241,14 +241,33 @@ working in a single-project repository.
 
 ```toml
 [git]
-commit = true
+through = "tag"                  # or "none", "commit", "push"
 commit_message = "chore: bump version to v{new_version}"
-tag = true
 tag_pattern = "v{new_version}"
 tag_style = "annotated"          # or "lightweight", or "signed"
 tag_message = "Release {new_version}"
-push = false
 ```
+
+**How far a bump goes is one ordered setting, not several booleans.** The steps
+are cumulative — each performs everything the one before it does, the way a log
+level includes the levels beneath it — so `through = "tag"` also commits.
+
+Naming only the furthest step is what makes a combination like "tag without a
+commit" impossible to write. Three independent booleans can spell eight states
+of which half are contradictory, and a tool that accepts them has to detect and
+silently repair the rest; a tool that cannot represent them has nothing to
+repair. It also means one setting is overridden by one flag, in either
+direction, rather than a flag per boolean plus an escape hatch.
+
+An absent `through` is **not** a fourth step. Nothing has been decided, so an
+interactive run asks and a subcommand does no git work. `through = "none"` is
+the opposite — a decision that this repository never touches git — and is acted
+upon without asking. A repository that keeps its projects inside another one's
+checkout needs to be able to say that, and needs to be believed.
+
+`vump init` writes `through = "tag"`. That matches what most version tools do
+by default (`npm version` commits and tags, and leaves pushing to you), and it
+stops one step short of the only action that reaches other people.
 
 Tags are **annotated by default**. A lightweight tag is a bare pointer with no
 tagger, date, or message; `git describe` prefers annotated tags and some
@@ -263,10 +282,24 @@ without a message, and the configuration cannot express the combination. Where
 git prompts for a key it prompts, exactly as it already does for `git commit`
 under `commit.gpgsign` — that is git's business, not a prompt vump introduces.
 
-**Configuration is authoritative.** If `vump.toml` says `commit = true`, vump
-commits — it does not ask, in any mode. Settings present in configuration are
-decisions the user has already made; re-asking them is a defect. Command-line
-flags override configuration for a single invocation.
+**Configuration is authoritative.** If `vump.toml` says `through = "tag"`, vump
+commits and tags — it does not ask, in any mode. Settings present in
+configuration are decisions the user has already made; re-asking them is a
+defect.
+
+**A flag replaces the setting it names, for one run.** Configuration sets the
+default; a flag overrides it; both use the same name and the same values. The
+override reads in both directions, so a configured step can be lowered as
+readily as raised — `--through none` when a push is configured but the result
+wants checking first, `--through push` when it does not.
+
+A setting earns a flag when someone could reasonably want a different answer
+for one run without changing the repository's convention: `--through` and
+`--tag-style` qualify, the latter for a signing key that is temporarily out of
+reach. `tag_pattern` deliberately does not. `check` reads it in reverse to work
+out which project a pushed tag belongs to, so a one-run override would produce
+a tag that verification cannot attribute — the pattern is a parser, not a
+preference.
 
 ## 4. CLI contract
 
@@ -330,19 +363,18 @@ vump self list            List published releases
 | `--dry-run`         | bump commands   | Compute and report the plan, write nothing     |
 | `--from <bump>`     | pre-release     | Stable bump the pre-release is based on        |
 | `--project <name>`  | all             | Select a project in a multi-project repository |
-| `--commit`          | bump commands   | Stage and commit the changed files             |
-| `--tag`             | bump commands   | Commit and tag (implies `--commit`)            |
-| `--push`            | bump commands   | Push commit and tag (implies `--commit`)       |
-| `--no-git`          | bump commands   | Perform no git actions, overriding configuration |
+| `--through <step>`  | bump commands   | How far to carry the release: `none`, `commit`, `tag`, `push` |
+| `--tag-style <style>` | bump commands | How the tag object is written                  |
 | `--json`            | global          | Machine-readable output                        |
 
-`--no-git` is the single escape hatch from authoritative configuration, and it
-conflicts with the three flags above: asking for no git actions and for a
-commit in one invocation is a contradiction, rejected at parse time.
+Both replace the `[git]` setting of the same name for one run. There is no
+escape hatch to keep separate from them, because `--through none` *is* the
+escape hatch, and no pairing of flags can contradict itself when only one names
+the answer.
 
-Only files declared in configuration are staged. If commit, tag, or push is
-active, a dirty working tree is a hard failure — a version bump must not sweep
-unrelated changes into its commit.
+Only files declared in configuration are staged. If the run reaches a commit, a
+dirty working tree is a hard failure — a version bump must not sweep unrelated
+changes into its commit.
 
 If push fails after a successful commit or tag, vump reports exactly what did
 succeed and prints the command to finish manually. Partial success must never

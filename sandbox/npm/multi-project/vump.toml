@@ -7,9 +7,7 @@
 # Git is off throughout the sandbox — see ../single-project/vump.toml.
 
 [git]
-commit = false
-tag = false
-push = false
+through = "none"
 tag_pattern = "{project}-v{new_version}"
 
 [[project]]

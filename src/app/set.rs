@@ -46,10 +46,10 @@ pub fn set(
 mod tests {
     use super::*;
     use crate::adapters::{MemoryFileSystem, MemoryVcs, VcsCall};
-    use crate::app::change::{GitIntent, apply};
+    use crate::app::change::apply;
     use crate::config::DEFAULT_TAG_MESSAGE;
     use crate::config::TagStyle;
-    use crate::config::{DEFAULT_TAG_PATTERN, GitSettings};
+    use crate::config::{DEFAULT_TAG_PATTERN, GitSettings, GitThrough};
     use crate::domain::TagPattern;
     use crate::ports::Annotation;
 
@@ -69,7 +69,7 @@ mod tests {
         Path::new("/repo")
     }
 
-    fn run(fs: &MemoryFileSystem, files: &[&str], target: &str, intent: GitIntent) -> ChangeSet {
+    fn run(fs: &MemoryFileSystem, files: &[&str], target: &str, through: GitThrough) -> ChangeSet {
         let settings = GitSettings::default();
         let pattern = TagPattern::parse(DEFAULT_TAG_PATTERN).unwrap();
         set(
@@ -78,7 +78,7 @@ mod tests {
             &project(files),
             v(target),
             GitPlanning {
-                intent,
+                through,
                 commit_message: &settings.commit_message,
                 tag: &pattern,
                 tag_style: TagStyle::default(),
@@ -93,7 +93,7 @@ mod tests {
         let fs = MemoryFileSystem::new().with_file("/repo/VERSION", "1.2.3\n");
         let vcs = MemoryVcs::new();
 
-        let changes = run(&fs, &["VERSION"], "2.0.0", GitIntent::default());
+        let changes = run(&fs, &["VERSION"], "2.0.0", GitThrough::None);
         apply(&fs, &vcs, root(), &changes).unwrap();
 
         assert_eq!(fs.get("/repo/VERSION").as_deref(), Some("2.0.0\n"));
@@ -107,12 +107,7 @@ mod tests {
             .with_file("/repo/Cargo.toml", "[package]\nversion = \"0.9.0\"\n");
         let vcs = MemoryVcs::new();
 
-        let changes = run(
-            &fs,
-            &["VERSION", "Cargo.toml"],
-            "2.0.0",
-            GitIntent::default(),
-        );
+        let changes = run(&fs, &["VERSION", "Cargo.toml"], "2.0.0", GitThrough::None);
 
         // There is no single version they are moving from, and each file's own
         // is preserved.
@@ -131,12 +126,7 @@ mod tests {
             .with_file("/repo/VERSION", "1.2.3\n")
             .with_file("/repo/Cargo.toml", "[package]\nversion = \"1.2.3\"\n");
 
-        let changes = run(
-            &fs,
-            &["VERSION", "Cargo.toml"],
-            "2.0.0",
-            GitIntent::default(),
-        );
+        let changes = run(&fs, &["VERSION", "Cargo.toml"], "2.0.0", GitThrough::None);
         assert_eq!(changes.common_origin(), Some(&v("1.2.3")));
     }
 
@@ -147,7 +137,7 @@ mod tests {
         let fs = MemoryFileSystem::new().with_file("/repo/VERSION", "2.0.0\n");
         let vcs = MemoryVcs::new();
 
-        let changes = run(&fs, &["VERSION"], "1.0.0", GitIntent::default());
+        let changes = run(&fs, &["VERSION"], "1.0.0", GitThrough::None);
         apply(&fs, &vcs, root(), &changes).unwrap();
 
         assert_eq!(fs.get("/repo/VERSION").as_deref(), Some("1.0.0\n"));
@@ -158,7 +148,7 @@ mod tests {
         // Committing an empty change is an error, so the caller checks this
         // rather than failing at the commit for an unrelated-looking reason.
         let fs = MemoryFileSystem::new().with_file("/repo/VERSION", "1.2.3\n");
-        let changes = run(&fs, &["VERSION"], "1.2.3", GitIntent::default());
+        let changes = run(&fs, &["VERSION"], "1.2.3", GitThrough::None);
 
         assert!(!changes.changes_anything());
     }
@@ -170,12 +160,7 @@ mod tests {
             .with_file("/repo/Cargo.toml", "[package]\nversion = \"0.9.0\"\n");
 
         // One file already matches; the other does not, so there is work to do.
-        let changes = run(
-            &fs,
-            &["VERSION", "Cargo.toml"],
-            "1.2.3",
-            GitIntent::default(),
-        );
+        let changes = run(&fs, &["VERSION", "Cargo.toml"], "1.2.3", GitThrough::None);
         assert!(changes.changes_anything());
     }
 
@@ -184,16 +169,7 @@ mod tests {
         let fs = MemoryFileSystem::new().with_file("/repo/VERSION", "1.0.0\n");
         let vcs = MemoryVcs::new();
 
-        let changes = run(
-            &fs,
-            &["VERSION"],
-            "3.0.0",
-            GitIntent {
-                commit: true,
-                tag: true,
-                push: false,
-            },
-        );
+        let changes = run(&fs, &["VERSION"], "3.0.0", GitThrough::Tag);
         apply(&fs, &vcs, root(), &changes).unwrap();
 
         assert_eq!(

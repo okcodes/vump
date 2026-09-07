@@ -4,7 +4,8 @@ use std::io::IsTerminal;
 
 use inquire::{Confirm, Select};
 
-use crate::ports::{GitChoice, Interaction, InteractionError};
+use crate::config::GitThrough;
+use crate::ports::{Interaction, InteractionError};
 
 /// Asks questions on the terminal.
 #[derive(Debug, Default, Clone, Copy)]
@@ -115,21 +116,21 @@ impl Interaction for TerminalInteraction {
             .ok_or(InteractionError::Cancelled)
     }
 
-    fn choose_git(&self) -> Result<GitChoice, InteractionError> {
+    fn choose_git(&self) -> Result<GitThrough, InteractionError> {
         Self::require_terminal()?;
 
         let chosen = Select::new(
-            "Git actions after bumping:",
+            "Carry the release through:",
             vec![GIT_NOTHING, GIT_COMMIT, GIT_TAG, GIT_PUSH],
         )
         .prompt()
         .map_err(|e| translate(&e))?;
 
         Ok(match chosen {
-            GIT_COMMIT => GitChoice::Commit,
-            GIT_TAG => GitChoice::Tag,
-            GIT_PUSH => GitChoice::TagAndPush,
-            _ => GitChoice::None,
+            GIT_COMMIT => GitThrough::Commit,
+            GIT_TAG => GitThrough::Tag,
+            GIT_PUSH => GitThrough::Push,
+            _ => GitThrough::None,
         })
     }
 
@@ -177,7 +178,7 @@ impl Interaction for NoInteraction {
         Self::refuse()
     }
 
-    fn choose_git(&self) -> Result<GitChoice, InteractionError> {
+    fn choose_git(&self) -> Result<GitThrough, InteractionError> {
         Self::refuse()
     }
 

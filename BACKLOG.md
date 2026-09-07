@@ -109,12 +109,26 @@ The composite action takes `version`, `config` and `vump-version`. Passing a
 tag now selects its own project, so a `project` input is only needed for a
 repository that verifies bare versions rather than tags.
 
-### A `--tag-style` flag
+### Pushing what a bump created, separately
 
-`tag_style` is configuration only. A per-run override would matter to someone
-whose signing key is temporarily unreachable, but the case is hypothetical and
-`--no-git` already covers skipping the tag entirely. Adding it needs a real
-occurrence first.
+A bump that stops at `through = "tag"` leaves a commit and a tag to push by
+hand. `git push --follow-tags` does it, but pushes *every* annotated tag
+reachable — in a monorepo that can publish another project's tag that happened
+to be sitting unpushed. vump's own push names the single ref it created, which
+is strictly narrower.
+
+A `vump push` would close that gap: read the current version, render the
+project's tag pattern, push `HEAD` and that one tag. It needs no stored state,
+since both are derivable from the files and the pattern.
+
+Undecided because the repository that would feel it — a monorepo with several
+projects tagged independently — does not exist here yet, and the single-project
+case is served by `git push --follow-tags` today.
+
+Not to be confused with a prompt between tagging and pushing, which was
+considered and rejected: a blocking prompt owns the terminal, so it cannot
+deliver the inspection it appears to offer. Stopping at `tag` and looking
+around with a free shell is strictly better.
 
 ### Per-project commit messages
 

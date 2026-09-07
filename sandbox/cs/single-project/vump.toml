@@ -10,6 +10,4 @@
 files = ["Demo/Demo.csproj"]
 
 [git]
-commit = false
-tag = false
-push = false
+through = "none"

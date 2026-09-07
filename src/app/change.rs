@@ -12,7 +12,7 @@ use thiserror::Error;
 
 use crate::app::{AppError, FileVersion, resolve};
 use crate::config::TagStyle;
-use crate::config::{GitSettings, Project};
+use crate::config::{GitSettings, GitThrough, Project};
 use crate::domain::TagPattern;
 use crate::domain::TransitionError;
 use crate::domain::version_file::Tracked;
@@ -129,25 +129,14 @@ pub struct Outcome {
     pub push_error: Option<String>,
 }
 
-/// Which git side-effects a run should perform.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct GitIntent {
-    /// Stage and commit.
-    pub commit: bool,
-    /// Create a tag.
-    pub tag: bool,
-    /// Push.
-    pub push: bool,
-}
-
-/// How a release is named, and which side-effects to perform.
+/// How a release is named, and how far it is carried.
 ///
-/// Naming travels with the intent because the tag template is resolved per
+/// Naming travels with the step because the tag template is resolved per
 /// project: two independently-versioned projects must not produce the same tag.
 #[derive(Debug, Clone, Copy)]
 pub struct GitPlanning<'a> {
-    /// Side-effects to perform.
-    pub intent: GitIntent,
+    /// How far to carry the release.
+    pub through: GitThrough,
     /// Commit message template.
     pub commit_message: &'a str,
     /// Tag template for the project being changed.
@@ -156,41 +145,6 @@ pub struct GitPlanning<'a> {
     pub tag_style: TagStyle,
     /// Message template for an annotated or signed tag.
     pub tag_message: &'a str,
-}
-
-/// Git side-effects requested on the command line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct GitFlags {
-    /// `--commit`
-    pub commit: bool,
-    /// `--tag`
-    pub tag: bool,
-    /// `--push`
-    pub push: bool,
-}
-
-impl GitIntent {
-    /// Combines configuration with command-line flags.
-    ///
-    /// Configuration is authoritative: a setting present in `vump.toml` is a
-    /// decision already made, and is acted upon without being re-asked. Flags
-    /// add to it for a single run.
-    ///
-    /// Tagging and pushing both require a commit to exist, so either implies
-    /// one.
-    ///
-    /// Suppressing configured behavior for one run is the caller's decision,
-    /// expressed by passing [`GitIntent::default`] instead of calling this.
-    #[must_use]
-    pub fn resolve(settings: &GitSettings, flags: GitFlags) -> Self {
-        let tag = settings.tag || flags.tag;
-        let push = settings.push || flags.push;
-        Self {
-            commit: settings.commit || flags.commit || tag || push,
-            tag,
-            push,
-        }
-    }
 }
 
 /// Why a change could not be planned or applied.
@@ -217,7 +171,7 @@ pub enum ChangeError {
 
     /// The working tree has uncommitted changes and the run would commit.
     #[error(
-        "the working tree has uncommitted changes, so a version bump would sweep them into its commit:\n{}\n\ncommit or stash them first, or re-run with --no-git",
+        "the working tree has uncommitted changes, so a version bump would sweep them into its commit:\n{}\n\ncommit or stash them first, or re-run with --through none",
         .changed.iter().map(|c| format!("  {c}")).collect::<Vec<_>>().join("\n")
     )]
     DirtyTree {
@@ -248,10 +202,10 @@ pub fn compose(
     planning: GitPlanning<'_>,
 ) -> ChangeSet {
     let git = GitPlan {
-        commit: planning.intent.commit.then(|| {
+        commit: planning.through.commits().then(|| {
             GitSettings::render(planning.commit_message, project.name.as_deref(), &target)
         }),
-        tag: planning.intent.tag.then(|| TagPlan {
+        tag: planning.through.tags().then(|| TagPlan {
             name: planning.tag.render(&target),
             annotation: match planning.tag_style {
                 TagStyle::Lightweight => None,
@@ -265,7 +219,7 @@ pub fn compose(
                 }),
             },
         }),
-        push: planning.intent.push,
+        push: planning.through.pushes(),
     };
 
     ChangeSet {
@@ -390,7 +344,7 @@ mod tests {
         TagPattern::parse(DEFAULT_TAG_PATTERN).unwrap()
     }
 
-    fn changeset(files: &[(&str, &str)], target: &str, intent: GitIntent) -> ChangeSet {
+    fn changeset(files: &[(&str, &str)], target: &str, through: GitThrough) -> ChangeSet {
         let settings = GitSettings::default();
         let pattern = pattern();
         compose(
@@ -404,7 +358,7 @@ mod tests {
                 })
                 .collect(),
             GitPlanning {
-                intent,
+                through,
                 commit_message: &settings.commit_message,
                 tag: &pattern,
                 tag_style: TagStyle::default(),
@@ -429,11 +383,7 @@ mod tests {
                 version: v("1.2.3"),
             }],
             GitPlanning {
-                intent: GitIntent {
-                    commit: true,
-                    tag: true,
-                    push: false,
-                },
+                through: GitThrough::Tag,
                 commit_message: &settings.commit_message,
                 tag: &pattern,
                 tag_style: style,
@@ -496,7 +446,7 @@ mod tests {
         let changes = changeset(
             &[("VERSION", "1.2.3"), ("Cargo.toml", "1.2.3")],
             "2.0.0",
-            GitIntent::default(),
+            GitThrough::None,
         );
         assert_eq!(changes.common_origin(), Some(&v("1.2.3")));
     }
@@ -508,14 +458,14 @@ mod tests {
         let changes = changeset(
             &[("VERSION", "1.2.3"), ("Cargo.toml", "0.9.0")],
             "2.0.0",
-            GitIntent::default(),
+            GitThrough::None,
         );
         assert_eq!(changes.common_origin(), None);
     }
 
     #[test]
     fn writing_the_recorded_version_changes_nothing() {
-        let changes = changeset(&[("VERSION", "1.2.3")], "1.2.3", GitIntent::default());
+        let changes = changeset(&[("VERSION", "1.2.3")], "1.2.3", GitThrough::None);
         assert!(!changes.changes_anything());
     }
 
@@ -524,7 +474,7 @@ mod tests {
         let changes = changeset(
             &[("VERSION", "1.2.3"), ("Cargo.toml", "0.9.0")],
             "1.2.3",
-            GitIntent::default(),
+            GitThrough::None,
         );
         assert!(changes.changes_anything());
     }
@@ -539,7 +489,7 @@ mod tests {
         let changes = changeset(
             &[("VERSION", "1.2.3"), ("Cargo.toml", "1.2.3")],
             "1.3.0",
-            GitIntent::default(),
+            GitThrough::None,
         );
         let outcome = apply(&fs, &vcs, Path::new("/repo"), &changes).unwrap();
 
@@ -555,15 +505,7 @@ mod tests {
         let fs = MemoryFileSystem::new().with_file("/repo/VERSION", "1.2.3\n");
         let vcs = MemoryVcs::new();
 
-        let changes = changeset(
-            &[("VERSION", "1.2.3")],
-            "1.2.4",
-            GitIntent {
-                commit: true,
-                tag: true,
-                push: false,
-            },
-        );
+        let changes = changeset(&[("VERSION", "1.2.3")], "1.2.4", GitThrough::Tag);
         let outcome = apply(&fs, &vcs, Path::new("/repo"), &changes).unwrap();
 
         assert!(outcome.committed && outcome.tagged && !outcome.pushed);
@@ -589,14 +531,7 @@ mod tests {
         let fs = MemoryFileSystem::new().with_file("/repo/VERSION", "1.0.0\n");
         let vcs = MemoryVcs::new().with_changes(&["src/main.rs"]);
 
-        let changes = changeset(
-            &[("VERSION", "1.0.0")],
-            "1.0.1",
-            GitIntent {
-                commit: true,
-                ..GitIntent::default()
-            },
-        );
+        let changes = changeset(&[("VERSION", "1.0.0")], "1.0.1", GitThrough::Commit);
 
         let err = apply(&fs, &vcs, Path::new("/repo"), &changes).unwrap_err();
         assert!(matches!(err, ChangeError::DirtyTree { .. }));
@@ -609,7 +544,7 @@ mod tests {
         let fs = MemoryFileSystem::new().with_file("/repo/VERSION", "1.0.0\n");
         let vcs = MemoryVcs::new().with_changes(&["src/main.rs"]);
 
-        let changes = changeset(&[("VERSION", "1.0.0")], "1.0.1", GitIntent::default());
+        let changes = changeset(&[("VERSION", "1.0.0")], "1.0.1", GitThrough::None);
         assert!(apply(&fs, &vcs, Path::new("/repo"), &changes).is_ok());
     }
 
@@ -618,15 +553,7 @@ mod tests {
         let fs = MemoryFileSystem::new().with_file("/repo/VERSION", "1.0.0\n");
         let vcs = MemoryVcs::new().failing("push", "no upstream configured");
 
-        let changes = changeset(
-            &[("VERSION", "1.0.0")],
-            "1.0.1",
-            GitIntent {
-                commit: true,
-                tag: true,
-                push: true,
-            },
-        );
+        let changes = changeset(&[("VERSION", "1.0.0")], "1.0.1", GitThrough::Push);
 
         // The commit and tag really happened, so this is not a failed run.
         let outcome = apply(&fs, &vcs, Path::new("/repo"), &changes).unwrap();
@@ -643,69 +570,35 @@ mod tests {
             .with_file("/repo/unrelated.txt", "untouched");
         let vcs = MemoryVcs::new();
 
-        let changes = changeset(
-            &[("VERSION", "1.0.0")],
-            "1.0.1",
-            GitIntent {
-                commit: true,
-                ..GitIntent::default()
-            },
-        );
+        let changes = changeset(&[("VERSION", "1.0.0")], "1.0.1", GitThrough::Commit);
         apply(&fs, &vcs, Path::new("/repo"), &changes).unwrap();
 
         assert_eq!(vcs.calls()[0], VcsCall::Stage(vec!["VERSION".to_owned()]));
     }
 
     #[test]
-    fn configuration_is_authoritative_for_git_intent() {
-        let configured = GitSettings {
-            commit: true,
-            tag: true,
-            ..GitSettings::default()
-        };
-
-        // Nothing on the command line: configuration alone decides.
-        let intent = GitIntent::resolve(&configured, GitFlags::default());
-        assert_eq!(
-            intent,
-            GitIntent {
-                commit: true,
-                tag: true,
-                push: false
-            }
+    fn each_step_performs_every_step_before_it() {
+        // The ladder is what makes a combination like "tag without a commit"
+        // impossible to construct, so the inclusion has to hold at every rung.
+        assert!(!GitThrough::None.commits());
+        assert!(GitThrough::Commit.commits());
+        assert!(
+            GitThrough::Tag.commits(),
+            "a tag needs a commit to point at"
         );
+        assert!(
+            GitThrough::Push.commits(),
+            "there is nothing to push without a commit"
+        );
+        assert!(GitThrough::Push.tags(), "the pushed ref is the tag");
+
+        assert!(!GitThrough::Commit.tags());
+        assert!(!GitThrough::Tag.pushes());
     }
 
     #[test]
-    fn tagging_or_pushing_implies_committing() {
-        let none = GitSettings::default();
-
-        let tagged = GitIntent::resolve(
-            &none,
-            GitFlags {
-                tag: true,
-                ..GitFlags::default()
-            },
-        );
-        assert!(tagged.commit, "a tag needs a commit to point at");
-
-        let pushed = GitIntent::resolve(
-            &none,
-            GitFlags {
-                push: true,
-                ..GitFlags::default()
-            },
-        );
-        assert!(pushed.commit, "there is nothing to push without a commit");
-    }
-
-    #[test]
-    fn the_default_intent_touches_nothing() {
-        // This is what `--no-git` selects, bypassing `resolve` entirely.
-        let intent = GitIntent::default();
-        assert!(!intent.commit && !intent.tag && !intent.push);
-
-        let changes = changeset(&[("VERSION", "1.0.0")], "1.0.1", intent);
+    fn the_first_step_touches_nothing() {
+        let changes = changeset(&[("VERSION", "1.0.0")], "1.0.1", GitThrough::None);
         assert!(!changes.git.touches_repository());
     }
 }

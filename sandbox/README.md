@@ -34,9 +34,9 @@ first and let the tags die with it:
 git clone . /tmp/vump-scratch && cd /tmp/vump-scratch/sandbox/npm/single-project
 ```
 
-Passing `--commit` or `--tag` here overrides the configuration for that run, as
-flags are meant to. Nothing stops you; it will just be this repository's
-history that grows a tag.
+Passing `--through commit` or `--through tag` here overrides the configuration
+for that run, as flags are meant to. Nothing stops you; it will just be this
+repository's history that grows a tag.
 
 ## Trying it
 

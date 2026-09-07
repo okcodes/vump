@@ -89,38 +89,88 @@ impl TagStyle {
     }
 }
 
+/// How far a bump carries the release.
+///
+/// The steps are ordered and cumulative: each performs everything the one
+/// before it does, the way a log level includes the levels beneath it. Naming
+/// only the furthest step is what makes a combination like "tag without a
+/// commit" impossible to write, rather than something to be detected and
+/// repaired.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GitThrough {
+    /// Write the files and stop.
+    None,
+    /// Commit the changed files.
+    Commit,
+    /// Commit, then tag.
+    Tag,
+    /// Commit, tag, then push the commit and that tag.
+    Push,
+}
+
+impl GitThrough {
+    /// The name this step carries in configuration and on the command line.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Commit => "commit",
+            Self::Tag => "tag",
+            Self::Push => "push",
+        }
+    }
+
+    /// Whether the changed files are staged and committed.
+    #[must_use]
+    pub fn commits(self) -> bool {
+        !matches!(self, Self::None)
+    }
+
+    /// Whether a tag is created.
+    #[must_use]
+    pub fn tags(self) -> bool {
+        matches!(self, Self::Tag | Self::Push)
+    }
+
+    /// Whether the commit and tag are pushed.
+    #[must_use]
+    pub fn pushes(self) -> bool {
+        matches!(self, Self::Push)
+    }
+}
+
 /// Git integration settings.
 ///
 /// These are decisions the user has already made. When a setting is present it
 /// is acted upon, never re-asked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitSettings {
-    /// Stage and commit the changed files.
-    pub commit: bool,
+    /// How far a bump carries the release, or `None` when unset.
+    ///
+    /// The absence is genuine rather than a fourth step: nothing has been
+    /// decided, so an interactive run asks and a subcommand does no git work.
+    /// `Some(GitThrough::None)` is the opposite — a decision that this
+    /// repository never touches git — and is acted upon without asking.
+    pub through: Option<GitThrough>,
     /// Template for the commit message.
     pub commit_message: String,
-    /// Create a tag. Implies `commit`.
-    pub tag: bool,
     /// Template for the tag name.
     pub tag_pattern: String,
     /// How the tag object is written.
     pub tag_style: TagStyle,
     /// Template for the message carried by an annotated or signed tag.
     pub tag_message: String,
-    /// Push the commit and tag to the remote. Implies `commit`.
-    pub push: bool,
 }
 
 impl Default for GitSettings {
     fn default() -> Self {
         Self {
-            commit: false,
+            through: None,
             commit_message: DEFAULT_COMMIT_MESSAGE.to_owned(),
-            tag: false,
             tag_pattern: DEFAULT_TAG_PATTERN.to_owned(),
             tag_style: TagStyle::default(),
             tag_message: DEFAULT_TAG_MESSAGE.to_owned(),
-            push: false,
         }
     }
 }
@@ -555,26 +605,22 @@ struct RawProject {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawGit {
-    commit: Option<bool>,
+    through: Option<GitThrough>,
     commit_message: Option<String>,
-    tag: Option<bool>,
     tag_pattern: Option<String>,
     tag_style: Option<TagStyle>,
     tag_message: Option<String>,
-    push: Option<bool>,
 }
 
 impl From<RawGit> for GitSettings {
     fn from(raw: RawGit) -> Self {
         let defaults = Self::default();
         Self {
-            commit: raw.commit.unwrap_or(defaults.commit),
+            through: raw.through,
             commit_message: raw.commit_message.unwrap_or(defaults.commit_message),
-            tag: raw.tag.unwrap_or(defaults.tag),
             tag_pattern: raw.tag_pattern.unwrap_or(defaults.tag_pattern),
             tag_style: raw.tag_style.unwrap_or(defaults.tag_style),
             tag_message: raw.tag_message.unwrap_or(defaults.tag_message),
-            push: raw.push.unwrap_or(defaults.push),
         }
     }
 }
@@ -650,17 +696,32 @@ mod tests {
             r#"
             files = ["VERSION"]
             [git]
-            tag = true
+            through = "tag"
             commit_message = "release {new_version}"
             "#,
         )
         .unwrap();
 
-        assert!(cfg.git.tag);
-        assert!(!cfg.git.commit, "unset booleans stay false");
+        assert_eq!(cfg.git.through, Some(GitThrough::Tag));
         assert_eq!(cfg.git.commit_message, "release {new_version}");
         // An unset template still gets its default rather than an empty string.
         assert_eq!(cfg.git.tag_pattern, DEFAULT_TAG_PATTERN);
+    }
+
+    #[test]
+    fn an_absent_step_is_distinct_from_a_configured_none() {
+        let silent = parse("files = [\"VERSION\"]\n").unwrap();
+        assert_eq!(
+            silent.git.through, None,
+            "silence is what makes an interactive run ask"
+        );
+
+        let decided = parse("files = [\"VERSION\"]\n[git]\nthrough = \"none\"\n").unwrap();
+        assert_eq!(
+            decided.git.through,
+            Some(GitThrough::None),
+            "a repository that never touches git has decided, and is not asked"
+        );
     }
 
     #[test]
