@@ -242,6 +242,30 @@ neither can be mistaken for a release of vump.
 Treat "how do I make per-directory configurations work" as a question with a
 different answer: one `vump.toml`, several `[[project]]` entries.
 
+**Git work from a nested configuration is refused**, naming the outer
+configuration and pointing at `[[project]]`. Refused rather than warned, for the
+same reason a release publishing no checksums is: a warning is visible in a
+guided run and useless everywhere else, and by the time one is printed about a
+pushed tag the tag is on the remote.
+
+`--allow-nested` proceeds anyway. It is a flag rather than a setting in the
+nested file deliberately. A setting would answer the question once and stay
+answered, pre-approving every later run from that directory including the
+accidental one, and nobody re-reads a `vump.toml` before typing `vump`. The flag
+asks again every time, which is what a person who has forgotten where they are
+standing needs. Its inconvenience is the point rather than a cost: it is a
+standing reminder that `[[project]]` is going unused, and the way to stop typing
+it is to restructure the configuration rather than to keep typing it.
+
+That places it outside the rule above about a flag mirroring a setting. This is
+not a preference with a default worth overriding, but an acknowledgement of a
+hazard already detected — the same shape as `vump init --force`, which is also a
+flag and would gain nothing from being spelled in a file.
+
+The refusal applies only when the run would reach a commit. `through = "none"`
+writes files and touches nothing else, which is exactly what a nested project is
+usable for.
+
 ### Tag patterns
 
 `tag_pattern` may be set per project, overriding the repository-wide one, and
@@ -395,6 +419,7 @@ vump self list            List published releases
 | `--project <name>`  | all             | Select a project in a multi-project repository |
 | `--through <step>`  | bump commands   | How far to carry the release: `none`, `commit`, `tag`, `push` |
 | `--tag-style <style>` | bump commands | How the tag object is written                  |
+| `--allow-nested`    | global          | Permit git work from a nested configuration    |
 | `--json`            | global          | Machine-readable output                        |
 
 Both replace the `[git]` setting of the same name for one run. There is no

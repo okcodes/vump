@@ -22,11 +22,13 @@ These projects have no repository of their own — they sit inside vump's. A
 commit or tag made here lands in **this** repository, so every `vump.toml` in
 the sandbox sets `through = "none"`.
 
-That setting can be overridden by a flag, so each also carries a `tag_pattern`
-that cannot be mistaken for vump's own: `sandbox-npm-v1.2.3` rather than
-`v1.2.3`. The release workflow triggers on tags matching `v*`, and an
-accidental tag from here must not be one of them. Leaving the pattern unset
-would default it to `v{new_version}`, which is exactly the collision to avoid.
+Two further layers stand behind that setting, because it can be overridden by
+a flag. vump refuses git work from a configuration nested inside another's
+repository unless `--allow-nested` is passed, so a bump here stops rather than
+committing. And each project names its own tag and commit so that one made in
+spite of all that still cannot be mistaken for vump's: `sandbox-npm-v1.2.3`
+rather than `v1.2.3`. The release workflow triggers on tags matching `v*`, and
+nothing from here may match it.
 
 That leaves nothing untested. Commits, tags and pushes are covered by the
 end-to-end suite, which creates a throwaway repository per test and asserts on
@@ -40,9 +42,10 @@ first and let the tags die with it:
 git clone . /tmp/vump-scratch && cd /tmp/vump-scratch/sandbox/npm/single-project
 ```
 
-Passing `--through commit` or `--through tag` here overrides the configuration
-for that run, as flags are meant to. Nothing stops you; it will just be this
-repository's history that grows a commit, and a tag under the sandbox prefix.
+Asking for git work here without that clone — `--through tag`, say — is
+refused, and the message says why. `--allow-nested` proceeds anyway, and then
+it is this repository's history that grows a commit and a sandbox-prefixed
+tag.
 
 ## Trying it
 

@@ -16,73 +16,8 @@ starting point, not a specification — expect it to change while building.
 
 ## Ready to build
 
-### Refusing git work from a nested configuration
-
-A `vump.toml` inside a repository whose own `vump.toml` sits above it commits
-and tags into a repository it does not describe. `vump patch --through push`
-run in `sandbox/npm/single-project` created a `v1.0.1` commit and tag in vump's
-own repository, from a project versioned at 1.0.0 that has nothing to do with
-vump's version.
-
-Half of that has since been closed off: every sandbox configuration now carries
-a `tag_pattern` that cannot match the `v*` the release workflow triggers on, so
-an accidental tag can no longer impersonate a release. The structural half
-remains — a nested configuration can still write to a repository that is not
-its own.
-
-**Refused, not warned.** A warning is visible in an interactive run and useless
-everywhere else: a subcommand prints it into a log nobody is reading, and by the
-time a `through = "push"` run emits one the tag is already on the remote. This
-is the same reasoning that makes a release publishing no checksums a refusal —
-a warning on an irreversible path is not a safeguard.
-
-Nested configurations are legal, so the refusal needs an opt-out, and it is a
-flag — `--allow-nested` — rather than a key in the nested file.
-
-A configuration key would settle the question once and stay settled, which is
-the failure mode: every later run from that directory is pre-approved, the
-accidental one included. The flag asks again every time, so the person who has
-forgotten which directory they are in is still stopped. Nobody re-reads a
-`vump.toml` before typing `vump`, and a permanent disarm is how a safeguard
-stops safeguarding.
-
-This is not the kind of setting the flag rule in [`DESIGN.md`](DESIGN.md)
-governs. That rule is about preferences with a default worth overriding for one
-run; this is an acknowledgement of a hazard vump has already detected, which is
-what `vump init --force` is too — and nothing would be gained by spelling that
-one `allow_overwrite = true` in a file.
-
-The friction a flag adds is the point rather than a cost to be minimized.
-Nested configurations are not a layout to be accommodated: `[[project]]` exists
-precisely so that a repository holding several things needs only one
-configuration, and a repository that has grown a second one has given up
-addressing projects by name, `vump status` over the whole repository, and any
-way to trace a pushed tag back to its project. Having to type `--allow-nested`
-on every such run is a standing reminder that a first-class feature is going
-unused, and that the alternative to typing it is not typing it but restructuring
-the configuration.
-
-Which leaves the sandbox as the only nested configuration that should exist
-anywhere, kept because those projects are meant to be run against by hand.
-
-**The error message is where the work happens.** It must name the configuration
-that was found, the outer one it sits under, and the repository the commit would
-land in, so that it reads as "wrong directory" rather than as an obstacle to get
-past. A refusal that only says what is forbidden invites reaching for the flag;
-one that says where you are invites `cd`.
-
-The refusal applies only when the run would reach a commit. `through = "none"`
-touches nothing outside the working tree, and the sandbox has to stay pleasant
-to use for what it is for.
-
-Shape: after discovery, walk from the configuration's directory up to the git
-root looking for another `vump.toml`. If one is found and the run would commit,
-refuse with `Exit::Config`. Checked before anything is written, beside the
-undeclared-lock check.
-
-Undecided: `--allow-nested` has to be global rather than sit with the other git
-flags, since those are on the bump subcommands only and a guided `vump` would
-otherwise have no way to proceed at all.
+Empty. Work arrives as an idea below and moves here once its problem is
+agreed, at which point it is ranked by value.
 
 ## Ideas, not yet decided
 
@@ -167,6 +102,23 @@ consumers are known to have `gh` available.
 `--channel` is per-invocation. Someone tracking release candidates types it
 every time. Persisting it needs installation-level state — a config directory
 vump otherwise has no need for — which one setting does not obviously justify.
+
+### Reporting which configuration is in effect
+
+`vump status` prints versions and whether they agree, but never says which
+`vump.toml` produced them. Configuration is discovered by searching upward, so
+the answer is not always the directory the caller is standing in, and the
+output of a single-project repository — `OK (this repository) 1.0.0` — looks
+identical wherever it was run from.
+
+The motivating case is the accidental bump inside `sandbox/`: `status` was the
+cheap way to notice the mistake first, except that what it printed gave no
+indication of where it was reading from. Advising people to run it beforehand
+is worth little while it withholds the one fact that would settle the question.
+
+Undecided only in how much to print — the path alone, relative to the working
+directory, is probably enough, and belongs in `status` rather than on every
+command.
 
 ### Inputs on the check action
 

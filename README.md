@@ -62,6 +62,7 @@ needs, or it fails saying what is missing.
 | `--from <patch\|minor\|major>` | Which release a new pre-release leads to |
 | `--through <none\|commit\|tag\|push>` | How far to carry the release, overriding `vump.toml` |
 | `--tag-style <annotated\|lightweight\|signed>` | How the tag object is written, overriding `vump.toml` |
+| `--allow-nested` | Permit git work from a `vump.toml` nested inside another's repository |
 | `--project <name>` | Select a project in a multi-project repository |
 | `--json` | Machine-readable output |
 | `--channel <c>` | `self` commands: least mature release to accept |
@@ -138,6 +139,13 @@ you happen to be standing; and a pushed tag can no longer be traced back to the
 project that produced it. Git operations still run against the enclosing
 repository, so a nested configuration commits and tags into a repository it
 does not describe.
+
+vump refuses that rather than warning about it — a warning arrives too late to
+help once a tag is pushed — so a bump from a nested `vump.toml` stops and points
+at `[[project]]`. Writing files still works, since only the commit and tag
+escape into the outer repository. `--allow-nested` proceeds anyway, and having
+to type it every time is intended: it means a feature that would remove the
+need is going unused.
 
 ### Tagging independently-versioned projects
 

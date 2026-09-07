@@ -54,6 +54,33 @@ impl Fixture {
         Run::from(output)
     }
 
+    /// Runs vump from a subdirectory, with stdin closed.
+    ///
+    /// Configuration is discovered by searching upward, so where vump is run
+    /// from is part of its behavior and has to be expressible in a test.
+    fn run_in(&self, dir: &str, args: &[&str]) -> Run {
+        let output = Command::new(env!("CARGO_BIN_EXE_vump"))
+            .args(args)
+            .current_dir(self.dir.path().join(dir))
+            .stdin(Stdio::null())
+            .output()
+            .expect("cannot run vump");
+        Run::from(output)
+    }
+
+    /// Runs git in a subdirectory of the fixture.
+    fn git_in(&self, dir: &str, args: &[&str]) -> &Self {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(self.dir.path().join(dir))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("cannot run git");
+        assert!(status.success(), "git {args:?} failed");
+        self
+    }
+
     /// Tags present in the fixture repository, in git's own order.
     fn tags(&self) -> Vec<String> {
         let out = Command::new("git")
@@ -425,6 +452,88 @@ fn a_repository_that_declares_no_git_work_gets_none() {
     assert_eq!(fx.read("VERSION"), "1.2.4\n");
 
     assert!(fx.tags().is_empty());
+}
+
+#[test]
+fn a_nested_configuration_may_not_commit_without_acknowledgement() {
+    // The accident this exists for: `vump patch --through push` run inside
+    // sandbox/npm/single-project tagged vump's own repository. Discovery stops
+    // at the nearest vump.toml, but git still operates on the enclosing
+    // repository, which the outer one describes.
+    let fx = Fixture::new()
+        .write("vump.toml", "files = [\"VERSION\"]\n")
+        .write("VERSION", "1.2.3\n")
+        .write("inner/vump.toml", "files = [\"VERSION\"]\n")
+        .write("inner/VERSION", "9.9.9\n")
+        .with_git();
+
+    let run = fx.run_in("inner", &["patch", "--through", "tag"]);
+    assert_eq!(run.code, 3, "{}", run.output());
+
+    // The message has to say where the caller actually is, or it reads as an
+    // obstacle to get past rather than as a wrong turn.
+    assert!(run.stderr.contains("inner/vump.toml"), "{}", run.stderr);
+    assert!(run.stderr.contains("[[project]]"), "{}", run.stderr);
+
+    // Refusing must leave everything as it was.
+    assert_eq!(fx.read("inner/VERSION"), "9.9.9\n");
+    assert!(fx.tags().is_empty());
+}
+
+#[test]
+fn a_nested_configuration_may_write_files_without_acknowledgement() {
+    // Only the commit and tag escape into a repository the configuration does
+    // not describe. Writing files inside a nested project is what the
+    // arrangement is for, and the sandbox depends on it staying usable.
+    let fx = Fixture::new()
+        .write("vump.toml", "files = [\"VERSION\"]\n")
+        .write("VERSION", "1.2.3\n")
+        .write("inner/vump.toml", "files = [\"VERSION\"]\n")
+        .write("inner/VERSION", "9.9.9\n")
+        .with_git();
+
+    assert_eq!(fx.run_in("inner", &["patch", "--through", "none"]).code, 0);
+    assert_eq!(fx.read("inner/VERSION"), "9.9.10\n");
+    assert_eq!(
+        fx.read("VERSION"),
+        "1.2.3\n",
+        "the outer project must not move"
+    );
+}
+
+#[test]
+fn an_acknowledged_nested_configuration_proceeds() {
+    let fx = Fixture::new()
+        .write("vump.toml", "files = [\"VERSION\"]\n")
+        .write("VERSION", "1.2.3\n")
+        .write("inner/vump.toml", "files = [\"VERSION\"]\n")
+        .write("inner/VERSION", "9.9.9\n")
+        .with_git();
+
+    let run = fx.run_in("inner", &["patch", "--through", "tag", "--allow-nested"]);
+    assert_eq!(run.code, 0, "{}", run.output());
+    assert_eq!(fx.tags(), ["v9.9.10"]);
+}
+
+#[test]
+fn a_configuration_at_the_repository_root_is_not_nested() {
+    // A vump.toml above the repository root describes a different repository
+    // and says nothing about this one, so the search must stop at the root
+    // rather than walking to the filesystem's.
+    let fx = Fixture::new()
+        .write("outer-vump-decoy/vump.toml", "files = [\"VERSION\"]\n")
+        .write("repo/vump.toml", "files = [\"VERSION\"]\n")
+        .write("repo/VERSION", "1.2.3\n");
+
+    fx.git_in("repo", &["init", "-q", "."]);
+    fx.git_in("repo", &["config", "user.email", "test@example.com"]);
+    fx.git_in("repo", &["config", "user.name", "Test"]);
+    fx.git_in("repo", &["config", "commit.gpgsign", "false"]);
+    fx.git_in("repo", &["add", "-A"]);
+    fx.git_in("repo", &["commit", "-qm", "initial"]);
+
+    let run = fx.run_in("repo", &["patch", "--through", "tag"]);
+    assert_eq!(run.code, 0, "{}", run.output());
 }
 
 #[test]
@@ -1304,7 +1413,16 @@ fn no_sandbox_project_can_produce_a_release_shaped_tag() {
         ("cs/single-project", None),
         ("cs/multi-project", Some("project-b")),
     ] {
-        let mut args = vec!["patch", "--through", "tag", "--dry-run", "--json"];
+        // --allow-nested is the point of this test: it asks for the tag a
+        // nested configuration would create, precisely to inspect its shape.
+        let mut args = vec![
+            "patch",
+            "--through",
+            "tag",
+            "--dry-run",
+            "--json",
+            "--allow-nested",
+        ];
         if let Some(name) = select {
             args.extend(["--project", name]);
         }

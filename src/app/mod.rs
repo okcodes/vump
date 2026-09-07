@@ -21,6 +21,40 @@ use crate::config::Project;
 use crate::domain::version_file::{self, LockFile, Tracked, VersionFileError};
 use crate::ports::{FileSystem, FsError};
 
+/// The `vump.toml` above this one inside the same repository, if there is one.
+///
+/// Discovery stops at the nearest configuration, so one deeper in a repository
+/// shadows the one describing the repository itself — while git still operates
+/// on the enclosing repository, which the shadowed configuration is the one
+/// describing. That combination is what lets a bump commit and tag against a
+/// project it has nothing to do with.
+///
+/// The search stops at the repository root. Beyond it a configuration belongs
+/// to a different repository entirely and says nothing about this one.
+#[must_use]
+pub fn outer_config(fs: &dyn FileSystem, root: &Path) -> Option<PathBuf> {
+    let mut dir = root;
+    loop {
+        if holds_git(fs, dir) {
+            return None;
+        }
+        dir = dir.parent()?;
+        let candidate = dir.join(crate::config::FILE_NAME);
+        if fs.is_file(&candidate) {
+            return Some(candidate);
+        }
+    }
+}
+
+/// Whether a directory is a repository root.
+///
+/// `.git` is a directory in an ordinary checkout and a file in a worktree or
+/// submodule, so the entry is matched by name rather than by kind.
+fn holds_git(fs: &dyn FileSystem, dir: &Path) -> bool {
+    fs.read_dir(dir)
+        .is_ok_and(|entries| entries.iter().any(|entry| entry.name == ".git"))
+}
+
 /// A version file and the version currently recorded in it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileVersion {

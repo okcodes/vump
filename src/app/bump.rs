@@ -13,7 +13,7 @@ use std::path::Path;
 
 use semver::Version;
 
-use crate::app::change::{ChangeError, ChangeSet, GitPlanning, compose};
+use crate::app::change::{ChangeError, ChangeSet, GitPlanning, check_nesting, compose};
 use crate::app::read_project_versions;
 use crate::config::Project;
 use crate::domain::{Transition, apply as transition_apply};
@@ -69,6 +69,7 @@ pub fn plan_from(
     transition: Transition,
     planning: GitPlanning<'_>,
 ) -> Result<BumpPlan, ChangeError> {
+    check_nesting(fs, root, planning)?;
     let files = read_project_versions(fs, root, project)?;
 
     let from = if let Some(base) = base {
@@ -145,6 +146,7 @@ mod tests {
     ) -> GitPlanning<'a> {
         GitPlanning {
             through,
+            allow_nested: false,
             commit_message: &settings.commit_message,
             tag,
             tag_style: settings.tag_style,

@@ -49,6 +49,13 @@ pub struct Cli {
     /// Select a project in a repository that declares several.
     #[arg(long, global = true, value_name = "NAME")]
     project: Option<String>,
+
+    /// Permit git work from a vump.toml nested inside another's repository.
+    ///
+    /// Global rather than a bump flag because a guided run takes none of
+    /// those, and would otherwise have no way to proceed at all.
+    #[arg(long, global = true)]
+    allow_nested: bool,
 }
 
 /// The operation to perform.
@@ -346,6 +353,7 @@ struct Context {
     config: Config,
     json: bool,
     project: Option<String>,
+    allow_nested: bool,
 }
 
 fn execute(cli: &Cli) -> Result<Exit, CliError> {
@@ -372,6 +380,7 @@ fn execute(cli: &Cli) -> Result<Exit, CliError> {
         config,
         json: cli.json,
         project: cli.project.clone(),
+        allow_nested: cli.allow_nested,
     };
 
     let pre = |label, args: &PreReleaseArgs| Transition::PreRelease {
@@ -534,6 +543,7 @@ fn interactive(ctx: &Context) -> Result<Exit, CliError> {
         *transition,
         GitPlanning {
             through,
+            allow_nested: ctx.allow_nested,
             commit_message: &ctx.config.git.commit_message,
             tag: &tag_pattern,
             tag_style: ctx.config.git.tag_style,
@@ -628,6 +638,7 @@ fn bump(
         transition,
         GitPlanning {
             through: git_args.through(&ctx.config.git),
+            allow_nested: ctx.allow_nested,
             commit_message: &ctx.config.git.commit_message,
             tag: &tag_pattern,
             tag_style: git_args.tag_style(&ctx.config.git),
@@ -676,6 +687,7 @@ fn set(ctx: &Context, version: &str, dry_run: bool, git_args: &GitArgs) -> Resul
         target,
         GitPlanning {
             through: git_args.through(&ctx.config.git),
+            allow_nested: ctx.allow_nested,
             commit_message: &ctx.config.git.commit_message,
             tag: &tag_pattern,
             tag_style: git_args.tag_style(&ctx.config.git),
@@ -883,6 +895,7 @@ impl CliError {
                 ChangeError::Transition(_) => Exit::InvalidTransition,
                 ChangeError::OutOfSync { .. } => Exit::OutOfSync,
                 ChangeError::DirtyTree { .. } => Exit::DirtyTree,
+                ChangeError::NestedConfig { .. } => Exit::Config,
                 ChangeError::Vcs(_) => Exit::Git,
             },
         }

@@ -137,6 +137,12 @@ pub struct Outcome {
 pub struct GitPlanning<'a> {
     /// How far to carry the release.
     pub through: GitThrough,
+    /// Whether git work is permitted from a configuration nested in another's
+    /// repository.
+    ///
+    /// Travels with the planning rather than being checked separately so that
+    /// no path reaching git can omit the question.
+    pub allow_nested: bool,
     /// Commit message template.
     pub commit_message: &'a str,
     /// Tag template for the project being changed.
@@ -179,6 +185,26 @@ pub enum ChangeError {
         changed: Vec<String>,
     },
 
+    /// Git work was asked for from a configuration nested inside another's.
+    ///
+    /// Refused rather than warned: by the time a warning about a pushed tag is
+    /// printed, the tag is on the remote.
+    #[error(
+        "{inner} sits inside a repository that {outer} describes, so a commit or tag \
+         made here would land in that repository rather than in this project.\n\n\
+         A repository holding several projects that version separately declares them \
+         as [[project]] entries in one {file}, which is what lets them be addressed \
+         by name from anywhere. Giving each its own {file} gives that up.\n\n\
+         Pass --allow-nested to proceed anyway.",
+        file = crate::config::FILE_NAME
+    )]
+    NestedConfig {
+        /// The configuration in effect, relative to the outer one.
+        inner: String,
+        /// The configuration describing the repository.
+        outer: String,
+    },
+
     /// A git operation failed.
     #[error("{0}")]
     Vcs(#[from] VcsError),
@@ -191,6 +217,46 @@ fn format_disagreement(found: &[(String, Version)]) -> String {
         .map(|(path, version)| format!("  {path:<width$}  {version}"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Refuses git work from a configuration nested inside another's repository.
+///
+/// Checked before anything is read or written, so a refusal leaves no partial
+/// state. A run that touches no git is allowed through: writing files inside a
+/// nested project is what the arrangement is for, and only the commit and tag
+/// escape into a repository the configuration does not describe.
+///
+/// # Errors
+///
+/// Returns [`ChangeError::NestedConfig`] when an outer configuration exists,
+/// the run would commit, and the caller has not acknowledged it.
+pub fn check_nesting(
+    fs: &dyn FileSystem,
+    root: &Path,
+    planning: GitPlanning<'_>,
+) -> Result<(), ChangeError> {
+    if planning.allow_nested || !planning.through.commits() {
+        return Ok(());
+    }
+    let Some(outer) = crate::app::outer_config(fs, root) else {
+        return Ok(());
+    };
+
+    // Paths are shown relative to the repository the commit would land in,
+    // which is the frame the reader needs to see where they actually are.
+    let base = outer.parent().unwrap_or(&outer);
+    let inner = root.join(crate::config::FILE_NAME);
+    let show = |path: &Path| {
+        path.strip_prefix(base)
+            .unwrap_or(path)
+            .display()
+            .to_string()
+    };
+
+    Err(ChangeError::NestedConfig {
+        inner: show(&inner),
+        outer: show(&outer),
+    })
 }
 
 /// Builds the change set that writing `target` would produce.
@@ -359,6 +425,7 @@ mod tests {
                 .collect(),
             GitPlanning {
                 through,
+                allow_nested: false,
                 commit_message: &settings.commit_message,
                 tag: &pattern,
                 tag_style: TagStyle::default(),
@@ -384,6 +451,7 @@ mod tests {
             }],
             GitPlanning {
                 through: GitThrough::Tag,
+                allow_nested: false,
                 commit_message: &settings.commit_message,
                 tag: &pattern,
                 tag_style: style,
