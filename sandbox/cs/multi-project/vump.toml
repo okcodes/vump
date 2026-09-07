@@ -1,12 +1,12 @@
 # Two C# projects released independently from one repository.
 #
-# Git is off throughout the sandbox — see ../../npm/single-project/vump.toml.
+# Git is off throughout the sandbox, and the prefix keeps these out of the
+# namespace vump releases from — see ../../npm/single-project/vump.toml.
 
 [git]
-commit = false
-tag = false
-push = false
-tag_pattern = "{project}-v{new_version}"
+through = "none"
+tag_pattern = "sandbox-cs-{project}-v{new_version}"
+commit_message = "chore(sandbox): bump cs/{project} to {new_version}"
 
 [[project]]
 name = "project-a"

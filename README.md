@@ -60,10 +60,8 @@ needs, or it fails saying what is missing.
 | --- | --- |
 | `--dry-run` | Report what would change, write nothing |
 | `--from <patch\|minor\|major>` | Which release a new pre-release leads to |
-| `--commit` | Stage and commit the changed files |
-| `--tag` | Commit and tag (implies `--commit`) |
-| `--push` | Push the commit and tag (implies `--commit`) |
-| `--no-git` | Do no git actions, overriding `vump.toml` for this run |
+| `--through <none\|commit\|tag\|push>` | How far to carry the release, overriding `vump.toml` |
+| `--tag-style <annotated\|lightweight\|signed>` | How the tag object is written, overriding `vump.toml` |
 | `--project <name>` | Select a project in a multi-project repository |
 | `--json` | Machine-readable output |
 | `--channel <c>` | `self` commands: least mature release to accept |
@@ -78,14 +76,22 @@ not be run from the repository root.
 files = ["VERSION", "ui/package.json"]
 
 [git]
-commit = true
-tag = true
-push = false
+through = "tag"                         # or "none", "commit", "push"
 commit_message = "chore: bump version to v{new_version}"
 tag_pattern = "v{new_version}"
 tag_style = "annotated"                 # or "lightweight", or "signed"
 tag_message = "Release {new_version}"
 ```
+
+`through` says how far a bump goes. The steps are cumulative, so `"tag"` also
+commits, and `"push"` commits, tags and pushes — the way a log level includes
+the levels below it. Leaving it out is not the same as `"none"`: with no value
+vump has been told nothing, so a guided run asks and a subcommand does no git
+work, whereas `"none"` is a decision that this repository never touches git.
+
+`vump init` writes `through = "tag"`, which is what most version tools do —
+`npm version` commits and tags and leaves the push to you. Pushing is the one
+step that reaches other people, so it is the one you opt into.
 
 Tags are **annotated** unless you ask otherwise — a real tag object with a
 message, a tagger and a date, which is what `git describe` prefers and what
@@ -93,8 +99,13 @@ some release tooling requires. `tag_style = "signed"` signs it; `"lightweight"`
 creates the bare pointer `git tag` makes on its own.
 
 **Configuration is authoritative.** A setting present here is a decision
-already made: vump acts on it without asking again, in guided runs too. Flags
-add to it for a single run; `--no-git` opts out for a single run.
+already made: vump acts on it without asking again, in guided runs too.
+
+**A flag replaces the setting it names, for one run**, in either direction —
+`--through none` when a push is configured but you want to check the result
+first, `--through push` when you are confident and would rather not push by
+hand. `--tag-style` works the same way, which is what to reach for when a
+signing key is temporarily out of reach.
 
 ### Independently-versioned projects
 
@@ -117,6 +128,16 @@ vump status                 # every project at a glance
 
 Naming rather than locating projects is deliberate: the caller is frequently
 not sitting in the project's directory.
+
+**Use one `vump.toml` per repository.** If you are reaching for a second one in
+a subdirectory, `[[project]]` is what you want instead — it is the feature that
+question is asking for. A repository with configurations scattered through it
+cannot address a project by name, so `--project` stops working and every bump
+means `cd`-ing to the right place first; `vump status` can only report wherever
+you happen to be standing; and a pushed tag can no longer be traced back to the
+project that produced it. Git operations still run against the enclosing
+repository, so a nested configuration commits and tags into a repository it
+does not describe.
 
 ### Tagging independently-versioned projects
 
@@ -174,7 +195,7 @@ guessed at.
 manifest disagree. So vump writes them in the same run:
 
 ```bash
-$ vump patch --tag
+$ vump patch --through tag
 OK   0.2.0 -> 0.2.1
   Cargo.toml
   Cargo.lock
@@ -338,7 +359,7 @@ carries information the other lacks.
 
 ```bash
 vump check "$TAG" --json
-vump patch --tag --json
+vump patch --through tag --json
 ```
 
 Exit codes are a stable contract:

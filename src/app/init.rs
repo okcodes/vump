@@ -191,17 +191,21 @@ fn render(files: &[String]) -> String {
 
     let _ = writeln!(
         out,
-        "# Actions performed after a successful bump. These are"
+        "# How far a bump carries the release. Each step performs"
     );
     let _ = writeln!(
         out,
-        "# decisions, not defaults: whatever is enabled here is"
+        "# every step before it, so \"tag\" also commits. This is a"
     );
-    let _ = writeln!(out, "# carried out without asking again.");
+    let _ = writeln!(
+        out,
+        "# decision, not a default: it is carried out without asking."
+    );
     let _ = writeln!(out, "[git]");
-    let _ = writeln!(out, "commit = false");
-    let _ = writeln!(out, "tag = false");
-    let _ = writeln!(out, "push = false");
+    let _ = writeln!(
+        out,
+        "through = \"tag\"   # or \"none\", \"commit\", \"push\""
+    );
     let _ = writeln!(out, "# commit_message = \"{DEFAULT_COMMIT_MESSAGE}\"");
     let _ = writeln!(out, "# tag_pattern = \"{DEFAULT_TAG_PATTERN}\"");
     let _ = writeln!(out, "# tag_message = \"{DEFAULT_TAG_MESSAGE}\"");
@@ -217,7 +221,7 @@ fn render(files: &[String]) -> String {
 mod tests {
     use super::*;
     use crate::adapters::MemoryFileSystem;
-    use crate::config::Config;
+    use crate::config::{Config, GitThrough};
 
     fn root() -> &'static Path {
         Path::new("/repo")
@@ -280,8 +284,10 @@ mod tests {
 
         assert!(config.is_single_unnamed());
         assert_eq!(config.projects[0].files, ["VERSION", "ui/package.json"]);
-        // Nothing is enabled behind the user's back.
-        assert!(!config.git.commit && !config.git.tag && !config.git.push);
+        // The generated default stops short of the one step that reaches
+        // other people.
+        assert_eq!(config.git.through, Some(GitThrough::Tag));
+        assert!(!config.git.through.unwrap().pushes());
     }
 
     #[test]

@@ -20,7 +20,13 @@ This is not test coverage. The suite in `tests/` and the fixtures in
 
 These projects have no repository of their own — they sit inside vump's. A
 commit or tag made here lands in **this** repository, so every `vump.toml` in
-the sandbox sets `commit`, `tag` and `push` to `false`.
+the sandbox sets `through = "none"`.
+
+That setting can be overridden by a flag, so each also carries a `tag_pattern`
+that cannot be mistaken for vump's own: `sandbox-npm-v1.2.3` rather than
+`v1.2.3`. The release workflow triggers on tags matching `v*`, and an
+accidental tag from here must not be one of them. Leaving the pattern unset
+would default it to `v{new_version}`, which is exactly the collision to avoid.
 
 That leaves nothing untested. Commits, tags and pushes are covered by the
 end-to-end suite, which creates a throwaway repository per test and asserts on
@@ -34,9 +40,9 @@ first and let the tags die with it:
 git clone . /tmp/vump-scratch && cd /tmp/vump-scratch/sandbox/npm/single-project
 ```
 
-Passing `--commit` or `--tag` here overrides the configuration for that run, as
-flags are meant to. Nothing stops you; it will just be this repository's
-history that grows a tag.
+Passing `--through commit` or `--through tag` here overrides the configuration
+for that run, as flags are meant to. Nothing stops you; it will just be this
+repository's history that grows a commit, and a tag under the sandbox prefix.
 
 ## Trying it
 
@@ -55,7 +61,7 @@ identifies its own project:
 cd sandbox/npm/multi-project
 vump status                          # every project at a glance
 vump patch --project project-a
-vump check project-a-v1.0.1          # the tag says which project to verify
+vump check sandbox-npm-project-a-v1.0.1   # the tag says which project to verify
 ```
 
 For C#, the version reaches the assembly:

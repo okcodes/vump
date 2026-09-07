@@ -10,8 +10,8 @@
 files = ["Cargo.toml", "Cargo.lock"]
 
 [git]
-commit = true
+# Stops short of pushing: the commit and tag are local and undoable, whereas a
+# pushed tag starts the release workflow. `--through push` when that is wanted.
+through = "tag"
 commit_message = "chore: bump version to v{new_version}"
-tag = true
 tag_pattern = "v{new_version}"
-push = false

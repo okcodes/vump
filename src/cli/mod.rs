@@ -13,12 +13,12 @@ use clap::{Parser, Subcommand};
 use thiserror::Error;
 
 use crate::adapters::{GitCli, GitHubReleases, RealFileSystem, TerminalInteraction};
-use crate::app::change::{ChangeError, GitFlags, GitIntent, GitPlanning};
+use crate::app::change::{ChangeError, GitPlanning};
 use crate::app::update::Channel;
 use crate::app::{self, AppError};
-use crate::config::{Config, ConfigError};
+use crate::config::{Config, ConfigError, GitThrough, TagStyle};
 use crate::domain::{PreLabel, StableBump, Transition, TransitionError};
-use crate::ports::{FsError, GitChoice, Interaction, InteractionError};
+use crate::ports::{FsError, Interaction, InteractionError};
 
 use exit::Exit;
 
@@ -223,30 +223,64 @@ struct PreReleaseArgs {
     git: GitArgs,
 }
 
-/// Git side-effects selectable on the command line.
+/// Git settings overridable for a single run.
 ///
-/// The usual objection to several booleans in one struct is unreadable call
-/// sites, which does not apply here: every field is a distinct, independently
-/// meaningful flag, named at the point of use both on the command line and in
-/// code.
-#[allow(clippy::struct_excessive_bools)]
+/// Each mirrors a `[git]` key by name and value, and replaces it rather than
+/// adding to it, so a configured step can be lowered as readily as raised.
 #[derive(Debug, clap::Args)]
 struct GitArgs {
-    /// Stage and commit the changed files.
-    #[arg(long)]
-    commit: bool,
+    /// How far to carry the release, overriding vump.toml for this run.
+    #[arg(long, value_name = "STEP")]
+    through: Option<GitThroughArg>,
 
-    /// Commit and tag. Implies --commit.
-    #[arg(long)]
-    tag: bool,
+    /// How the tag object is written, overriding vump.toml for this run.
+    #[arg(long, value_name = "STYLE")]
+    tag_style: Option<TagStyleArg>,
+}
 
-    /// Push the commit and tag. Implies --commit.
-    #[arg(long)]
-    push: bool,
+/// How far a bump carries the release.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum GitThroughArg {
+    /// Write the files and stop.
+    None,
+    /// Commit the changed files.
+    Commit,
+    /// Commit, then tag.
+    Tag,
+    /// Commit, tag, then push the commit and that tag.
+    Push,
+}
 
-    /// Perform no git actions, overriding vump.toml for this run.
-    #[arg(long, conflicts_with_all = ["commit", "tag", "push"])]
-    no_git: bool,
+impl From<GitThroughArg> for GitThrough {
+    fn from(arg: GitThroughArg) -> Self {
+        match arg {
+            GitThroughArg::None => Self::None,
+            GitThroughArg::Commit => Self::Commit,
+            GitThroughArg::Tag => Self::Tag,
+            GitThroughArg::Push => Self::Push,
+        }
+    }
+}
+
+/// How a tag object is written.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum TagStyleArg {
+    /// A tag object carrying a message, a tagger, and a date.
+    Annotated,
+    /// A bare pointer to a commit.
+    Lightweight,
+    /// An annotated tag, signed.
+    Signed,
+}
+
+impl From<TagStyleArg> for TagStyle {
+    fn from(arg: TagStyleArg) -> Self {
+        match arg {
+            TagStyleArg::Annotated => Self::Annotated,
+            TagStyleArg::Lightweight => Self::Lightweight,
+            TagStyleArg::Signed => Self::Signed,
+        }
+    }
 }
 
 /// The stable bump a pre-release is based on.
@@ -271,19 +305,22 @@ impl From<StableBumpArg> for StableBump {
 }
 
 impl GitArgs {
-    /// Resolves configuration and flags into the side-effects to perform.
-    fn intent(&self, settings: &crate::config::GitSettings) -> GitIntent {
-        if self.no_git {
-            return GitIntent::default();
-        }
-        GitIntent::resolve(
-            settings,
-            GitFlags {
-                commit: self.commit,
-                tag: self.tag,
-                push: self.push,
-            },
-        )
+    /// How far to carry the release: the flag when given, otherwise
+    /// configuration.
+    ///
+    /// A subcommand never prompts, so configuration that decides nothing means
+    /// no git work rather than a question.
+    fn through(&self, settings: &crate::config::GitSettings) -> GitThrough {
+        self.through
+            .map(GitThrough::from)
+            .or(settings.through)
+            .unwrap_or(GitThrough::None)
+    }
+
+    /// How the tag object is written: the flag when given, otherwise
+    /// configuration.
+    fn tag_style(&self, settings: &crate::config::GitSettings) -> TagStyle {
+        self.tag_style.map_or(settings.tag_style, TagStyle::from)
     }
 }
 
@@ -482,10 +519,10 @@ fn interactive(ctx: &Context) -> Result<Exit, CliError> {
         .get(index)
         .ok_or(CliError::Interaction(InteractionError::Cancelled))?;
 
-    // Which git actions, asked only when configuration has not decided.
-    let intent = match configured_intent(&ctx.config.git) {
-        Some(intent) => intent,
-        None => intent_from(ask.choose_git()?),
+    // How far to carry the release, asked only when configuration has not said.
+    let through = match ctx.config.git.through {
+        Some(through) => through,
+        None => ask.choose_git()?,
     };
 
     let tag_pattern = ctx.config.tag_pattern_for(&project)?;
@@ -496,7 +533,7 @@ fn interactive(ctx: &Context) -> Result<Exit, CliError> {
         Some(base),
         *transition,
         GitPlanning {
-            intent,
+            through,
             commit_message: &ctx.config.git.commit_message,
             tag: &tag_pattern,
             tag_style: ctx.config.git.tag_style,
@@ -561,39 +598,6 @@ fn resolve_base(
     }
 }
 
-/// The git side-effects configuration has already decided, if any.
-///
-/// Returning `None` means configuration is silent on the matter, which is the
-/// only case where asking is warranted.
-fn configured_intent(settings: &crate::config::GitSettings) -> Option<GitIntent> {
-    if settings.commit || settings.tag || settings.push {
-        Some(GitIntent::resolve(settings, GitFlags::default()))
-    } else {
-        None
-    }
-}
-
-fn intent_from(choice: GitChoice) -> GitIntent {
-    match choice {
-        GitChoice::None => GitIntent::default(),
-        GitChoice::Commit => GitIntent {
-            commit: true,
-            tag: false,
-            push: false,
-        },
-        GitChoice::Tag => GitIntent {
-            commit: true,
-            tag: true,
-            push: false,
-        },
-        GitChoice::TagAndPush => GitIntent {
-            commit: true,
-            tag: true,
-            push: true,
-        },
-    }
-}
-
 /// Names a transition the way the corresponding subcommand is spelled, so the
 /// menu teaches the non-interactive equivalent.
 fn describe_transition(transition: Transition) -> String {
@@ -615,7 +619,6 @@ fn bump(
     git_args: &GitArgs,
 ) -> Result<Exit, CliError> {
     let project = ctx.config.select(ctx.project.as_deref())?;
-    let intent = git_args.intent(&ctx.config.git);
     let tag_pattern = ctx.config.tag_pattern_for(project)?;
 
     let plan = app::bump::plan(
@@ -624,10 +627,10 @@ fn bump(
         project,
         transition,
         GitPlanning {
-            intent,
+            through: git_args.through(&ctx.config.git),
             commit_message: &ctx.config.git.commit_message,
             tag: &tag_pattern,
-            tag_style: ctx.config.git.tag_style,
+            tag_style: git_args.tag_style(&ctx.config.git),
             tag_message: &ctx.config.git.tag_message,
         },
     )?;
@@ -664,7 +667,6 @@ fn set(ctx: &Context, version: &str, dry_run: bool, git_args: &GitArgs) -> Resul
         })?;
 
     let project = ctx.config.select(ctx.project.as_deref())?;
-    let intent = git_args.intent(&ctx.config.git);
     let tag_pattern = ctx.config.tag_pattern_for(project)?;
 
     let changes = app::set::set(
@@ -673,10 +675,10 @@ fn set(ctx: &Context, version: &str, dry_run: bool, git_args: &GitArgs) -> Resul
         project,
         target,
         GitPlanning {
-            intent,
+            through: git_args.through(&ctx.config.git),
             commit_message: &ctx.config.git.commit_message,
             tag: &tag_pattern,
-            tag_style: ctx.config.git.tag_style,
+            tag_style: git_args.tag_style(&ctx.config.git),
             tag_message: &ctx.config.git.tag_message,
         },
     )?;
@@ -923,11 +925,11 @@ mod tests {
     }
 
     #[test]
-    fn no_git_cannot_be_combined_with_a_git_action() {
-        // Asking for no git actions and for a commit in the same breath is a
-        // contradiction, caught at parse time rather than silently resolved.
-        assert!(Cli::try_parse_from(["vump", "patch", "--no-git", "--commit"]).is_err());
-        assert!(Cli::try_parse_from(["vump", "patch", "--no-git", "--tag"]).is_err());
+    fn a_step_beyond_the_ladder_is_refused_at_parse_time() {
+        // Naming one step is what makes a contradictory pair unspellable, so
+        // the only way left to get it wrong is to name a step that is not one.
+        assert!(Cli::try_parse_from(["vump", "patch", "--through", "tag"]).is_ok());
+        assert!(Cli::try_parse_from(["vump", "patch", "--through", "everything"]).is_err());
     }
 
     #[test]

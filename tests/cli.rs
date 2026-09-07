@@ -198,7 +198,7 @@ fn disagreeing_files_exit_five() {
         .write("VERSION", "1.2.3\n")
         .write("Cargo.toml", "[package]\nversion = \"1.0.0\"\n");
 
-    let run = fx.run(&["patch", "--no-git"]);
+    let run = fx.run(&["patch", "--through", "none"]);
     assert_eq!(run.code, 5, "{}", run.output());
 }
 
@@ -210,7 +210,7 @@ fn a_dirty_tree_exits_six() {
         .with_git()
         .write("stray.txt", "uncommitted");
 
-    let run = fx.run(&["patch", "--commit"]);
+    let run = fx.run(&["patch", "--through", "commit"]);
     assert_eq!(run.code, 6, "{}", run.output());
     // Refusing must leave the version untouched.
     assert_eq!(fx.read("VERSION"), "1.2.3\n");
@@ -222,7 +222,7 @@ fn an_impossible_transition_exits_seven() {
         .write("vump.toml", SINGLE)
         .write("VERSION", "1.2.3-rc.1\n");
 
-    let run = fx.run(&["patch", "--no-git"]);
+    let run = fx.run(&["patch", "--through", "none"]);
     assert_eq!(run.code, 7, "{}", run.output());
     // The message must point at the command that resolves the ambiguity.
     assert!(run.stderr.contains("release"), "{}", run.stderr);
@@ -234,7 +234,7 @@ fn starting_a_pre_release_without_a_base_exits_seven() {
         .write("vump.toml", SINGLE)
         .write("VERSION", "1.2.3\n");
 
-    let run = fx.run(&["alpha", "--no-git"]);
+    let run = fx.run(&["alpha", "--through", "none"]);
     assert_eq!(run.code, 7, "{}", run.output());
     assert!(run.stderr.contains("--from"), "{}", run.stderr);
 }
@@ -252,21 +252,21 @@ fn no_subcommand_ever_waits_for_input() {
         .write("Cargo.toml", "[package]\nversion = \"1.0.0\"\n");
 
     // Files disagree: resolved by erroring, not by asking which to trust.
-    assert_eq!(fx.run(&["patch", "--no-git"]).code, 5);
+    assert_eq!(fx.run(&["patch", "--through", "none"]).code, 5);
 
     let fx = Fixture::new()
         .write("vump.toml", SINGLE)
         .write("VERSION", "1.2.3\n");
 
     // Pre-release from stable: resolved by requiring a flag, not by asking.
-    assert_eq!(fx.run(&["beta", "--no-git"]).code, 7);
+    assert_eq!(fx.run(&["beta", "--through", "none"]).code, 7);
 
     let fx = Fixture::new()
         .write("vump.toml", SINGLE)
         .write("VERSION", "1.2.3-beta.2\n");
 
     // Stable bump on a pre-release: resolved by erroring, not by asking.
-    assert_eq!(fx.run(&["minor", "--no-git"]).code, 7);
+    assert_eq!(fx.run(&["minor", "--through", "none"]).code, 7);
 }
 
 #[test]
@@ -292,7 +292,7 @@ fn a_bump_writes_every_tracked_file() {
         .write("VERSION", "1.2.3\n")
         .write("ui/package.json", "{\n  \"version\": \"1.2.3\"\n}\n");
 
-    let run = fx.run(&["minor", "--no-git"]);
+    let run = fx.run(&["minor", "--through", "none"]);
     assert_eq!(run.code, 0, "{}", run.output());
     assert_eq!(fx.read("VERSION"), "1.3.0\n");
     assert!(fx.read("ui/package.json").contains("\"1.3.0\""));
@@ -304,7 +304,7 @@ fn dry_run_writes_nothing() {
         .write("vump.toml", SINGLE)
         .write("VERSION", "1.2.3\n");
 
-    let run = fx.run(&["major", "--dry-run", "--no-git"]);
+    let run = fx.run(&["major", "--dry-run", "--through", "none"]);
     assert_eq!(run.code, 0, "{}", run.output());
     assert_eq!(fx.read("VERSION"), "1.2.3\n");
     assert!(run.stdout.contains("2.0.0"));
@@ -316,16 +316,20 @@ fn a_pre_release_sequence_advances_and_finalizes() {
         .write("vump.toml", SINGLE)
         .write("VERSION", "1.2.3\n");
 
-    assert_eq!(fx.run(&["alpha", "--from", "minor", "--no-git"]).code, 0);
+    assert_eq!(
+        fx.run(&["alpha", "--from", "minor", "--through", "none"])
+            .code,
+        0
+    );
     assert_eq!(fx.read("VERSION"), "1.3.0-alpha.0\n");
 
-    assert_eq!(fx.run(&["alpha", "--no-git"]).code, 0);
+    assert_eq!(fx.run(&["alpha", "--through", "none"]).code, 0);
     assert_eq!(fx.read("VERSION"), "1.3.0-alpha.1\n");
 
-    assert_eq!(fx.run(&["rc", "--no-git"]).code, 0);
+    assert_eq!(fx.run(&["rc", "--through", "none"]).code, 0);
     assert_eq!(fx.read("VERSION"), "1.3.0-rc.0\n");
 
-    assert_eq!(fx.run(&["release", "--no-git"]).code, 0);
+    assert_eq!(fx.run(&["release", "--through", "none"]).code, 0);
     assert_eq!(fx.read("VERSION"), "1.3.0\n");
 }
 
@@ -335,7 +339,7 @@ fn moving_to_a_less_mature_channel_is_refused() {
         .write("vump.toml", SINGLE)
         .write("VERSION", "1.2.3-rc.2\n");
 
-    let run = fx.run(&["alpha", "--no-git"]);
+    let run = fx.run(&["alpha", "--through", "none"]);
     assert_eq!(run.code, 7, "{}", run.output());
     assert_eq!(fx.read("VERSION"), "1.2.3-rc.2\n");
 }
@@ -347,7 +351,7 @@ fn a_bump_commits_and_tags_when_asked() {
         .write("VERSION", "1.2.3\n")
         .with_git();
 
-    let run = fx.run(&["patch", "--tag"]);
+    let run = fx.run(&["patch", "--through", "tag"]);
     assert_eq!(run.code, 0, "{}", run.output());
 
     assert_eq!(fx.tags(), ["v1.2.4"]);
@@ -358,7 +362,10 @@ fn configuration_alone_drives_git_actions() {
     // No git flags are passed: settings in vump.toml are decisions already
     // made, and must be acted upon rather than ignored.
     let fx = Fixture::new()
-        .write("vump.toml", "files = [\"VERSION\"]\n[git]\ntag = true\n")
+        .write(
+            "vump.toml",
+            "files = [\"VERSION\"]\n[git]\nthrough = \"tag\"\n",
+        )
         .write("VERSION", "1.2.3\n")
         .with_git();
 
@@ -368,16 +375,73 @@ fn configuration_alone_drives_git_actions() {
 }
 
 #[test]
-fn no_git_overrides_configured_actions() {
+fn a_configured_step_can_be_lowered_for_one_run() {
     let fx = Fixture::new()
-        .write("vump.toml", "files = [\"VERSION\"]\n[git]\ntag = true\n")
+        .write(
+            "vump.toml",
+            "files = [\"VERSION\"]\n[git]\nthrough = \"tag\"\n",
+        )
         .write("VERSION", "1.2.3\n")
         .with_git();
 
-    assert_eq!(fx.run(&["patch", "--no-git"]).code, 0);
+    assert_eq!(fx.run(&["patch", "--through", "none"]).code, 0);
     assert_eq!(fx.read("VERSION"), "1.2.4\n");
 
     assert!(fx.tags().is_empty());
+}
+
+#[test]
+fn a_configured_step_can_be_raised_for_one_run() {
+    // The override reads in both directions. Raising it is the case a flag
+    // that only ever added could already express; lowering it was not.
+    let fx = Fixture::new()
+        .write(
+            "vump.toml",
+            "files = [\"VERSION\"]\n[git]\nthrough = \"commit\"\n",
+        )
+        .write("VERSION", "1.2.3\n")
+        .with_git();
+
+    assert_eq!(fx.run(&["patch", "--through", "tag"]).code, 0);
+
+    assert_eq!(fx.tags(), ["v1.2.4"]);
+}
+
+#[test]
+fn a_repository_that_declares_no_git_work_gets_none() {
+    // `through = "none"` is a decision, and the sandbox depends on it: those
+    // projects sit inside vump's own repository, so a commit made there lands
+    // in it. Silence used to be indistinguishable from this, which left no way
+    // to say "never".
+    let fx = Fixture::new()
+        .write(
+            "vump.toml",
+            "files = [\"VERSION\"]\n[git]\nthrough = \"none\"\n",
+        )
+        .write("VERSION", "1.2.3\n")
+        .with_git();
+
+    assert_eq!(fx.run(&["patch"]).code, 0);
+    assert_eq!(fx.read("VERSION"), "1.2.4\n");
+
+    assert!(fx.tags().is_empty());
+}
+
+#[test]
+fn a_tag_style_can_be_overridden_without_editing_the_repository() {
+    // A signing key that is temporarily out of reach must not require a commit
+    // to a tracked file to work around.
+    let fx = Fixture::new()
+        .write(
+            "vump.toml",
+            "files = [\"VERSION\"]\n[git]\nthrough = \"tag\"\ntag_style = \"signed\"\n",
+        )
+        .write("VERSION", "1.2.3\n")
+        .with_git();
+
+    let run = fx.run(&["patch", "--tag-style", "lightweight"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_eq!(fx.tags(), ["v1.2.4"]);
 }
 
 // ─── Setting an exact version ────────────────────────────────────────────────
@@ -391,15 +455,15 @@ fn set_repairs_files_that_a_bump_refuses() {
         .write("VERSION", "1.2.3\n")
         .write("Cargo.toml", "[package]\nversion = \"0.9.0\"\n");
 
-    assert_eq!(fx.run(&["patch", "--no-git"]).code, 5);
+    assert_eq!(fx.run(&["patch", "--through", "none"]).code, 5);
 
-    let run = fx.run(&["set", "2.0.0", "--no-git"]);
+    let run = fx.run(&["set", "2.0.0", "--through", "none"]);
     assert_eq!(run.code, 0, "{}", run.output());
     assert_eq!(fx.read("VERSION"), "2.0.0\n");
     assert!(fx.read("Cargo.toml").contains("2.0.0"));
 
     // Repaired, so an ordinary bump works again.
-    assert_eq!(fx.run(&["patch", "--no-git"]).code, 0);
+    assert_eq!(fx.run(&["patch", "--through", "none"]).code, 0);
     assert_eq!(fx.read("VERSION"), "2.0.1\n");
 }
 
@@ -409,7 +473,7 @@ fn set_accepts_a_v_prefix() {
         .write("vump.toml", SINGLE)
         .write("VERSION", "1.0.0\n");
 
-    assert_eq!(fx.run(&["set", "v2.5.0", "--no-git"]).code, 0);
+    assert_eq!(fx.run(&["set", "v2.5.0", "--through", "none"]).code, 0);
     assert_eq!(fx.read("VERSION"), "2.5.0\n");
 }
 
@@ -419,7 +483,7 @@ fn set_moves_backwards_without_complaint() {
         .write("vump.toml", SINGLE)
         .write("VERSION", "2.0.0\n");
 
-    assert_eq!(fx.run(&["set", "1.0.0", "--no-git"]).code, 0);
+    assert_eq!(fx.run(&["set", "1.0.0", "--through", "none"]).code, 0);
     assert_eq!(fx.read("VERSION"), "1.0.0\n");
 }
 
@@ -428,7 +492,10 @@ fn setting_the_recorded_version_is_a_no_op_not_a_failure() {
     // Configuration asks for a commit, and git refuses an empty one. The run
     // must report success rather than fail for a reason unrelated to the ask.
     let fx = Fixture::new()
-        .write("vump.toml", "files = [\"VERSION\"]\n[git]\ncommit = true\n")
+        .write(
+            "vump.toml",
+            "files = [\"VERSION\"]\n[git]\nthrough = \"commit\"\n",
+        )
         .write("VERSION", "1.2.3\n")
         .with_git();
 
@@ -445,7 +512,7 @@ fn set_commits_and_tags_like_a_bump() {
         .write("VERSION", "1.0.0\n")
         .with_git();
 
-    assert_eq!(fx.run(&["set", "4.5.6", "--tag"]).code, 0);
+    assert_eq!(fx.run(&["set", "4.5.6", "--through", "tag"]).code, 0);
     assert_eq!(fx.tags(), ["v4.5.6"]);
 }
 
@@ -455,7 +522,7 @@ fn set_honours_dry_run() {
         .write("vump.toml", SINGLE)
         .write("VERSION", "1.0.0\n");
 
-    let run = fx.run(&["set", "9.9.9", "--dry-run", "--no-git"]);
+    let run = fx.run(&["set", "9.9.9", "--dry-run", "--through", "none"]);
     assert_eq!(run.code, 0, "{}", run.output());
     assert_eq!(fx.read("VERSION"), "1.0.0\n");
     assert!(run.stdout.contains("9.9.9"));
@@ -468,7 +535,9 @@ fn set_reports_each_files_previous_version_as_json() {
         .write("VERSION", "1.2.3\n")
         .write("Cargo.toml", "[package]\nversion = \"0.9.0\"\n");
 
-    let value = fx.run(&["set", "2.0.0", "--no-git", "--json"]).json();
+    let value = fx
+        .run(&["set", "2.0.0", "--through", "none", "--json"])
+        .json();
 
     assert_eq!(value["version"], "2.0.0");
     // Files disagreed, so there is no single version they moved from.
@@ -483,7 +552,10 @@ fn a_malformed_set_argument_exits_two() {
         .write("vump.toml", SINGLE)
         .write("VERSION", "1.0.0\n");
 
-    assert_eq!(fx.run(&["set", "not-a-version", "--no-git"]).code, 2);
+    assert_eq!(
+        fx.run(&["set", "not-a-version", "--through", "none"]).code,
+        2
+    );
     assert_eq!(fx.read("VERSION"), "1.0.0\n");
 }
 
@@ -547,7 +619,11 @@ fn projects_are_versioned_independently() {
         .write("api/Cargo.toml", "[package]\nversion = \"1.0.0\"\n")
         .write("web/package.json", "{\"version\":\"3.4.5\"}");
 
-    assert_eq!(fx.run(&["patch", "--project", "api", "--no-git"]).code, 0);
+    assert_eq!(
+        fx.run(&["patch", "--project", "api", "--through", "none"])
+            .code,
+        0
+    );
 
     assert!(fx.read("api/Cargo.toml").contains("1.0.1"));
     assert!(
@@ -594,7 +670,7 @@ fn a_tag_identifies_its_own_project() {
 fn a_bump_tags_with_the_projects_own_pattern() {
     let fx = tagged_monorepo().with_git();
 
-    let run = fx.run(&["patch", "--project", "api", "--tag"]);
+    let run = fx.run(&["patch", "--project", "api", "--through", "tag"]);
     assert_eq!(run.code, 0, "{}", run.output());
 
     assert_eq!(fx.tags(), ["api-v1.0.1"]);
@@ -610,8 +686,16 @@ fn independently_versioned_projects_do_not_collide_on_tags() {
         .write("web/package.json", "{\"version\":\"2.0.0\"}")
         .with_git();
 
-    assert_eq!(fx.run(&["patch", "--project", "api", "--tag"]).code, 0);
-    assert_eq!(fx.run(&["patch", "--project", "web", "--tag"]).code, 0);
+    assert_eq!(
+        fx.run(&["patch", "--project", "api", "--through", "tag"])
+            .code,
+        0
+    );
+    assert_eq!(
+        fx.run(&["patch", "--project", "web", "--through", "tag"])
+            .code,
+        0
+    );
 
     let mut listed = fx.tags();
     listed.sort();
@@ -659,7 +743,7 @@ fn a_bump_without_a_project_is_refused_when_several_exist() {
         .write("api/Cargo.toml", "[package]\nversion = \"1.0.0\"\n")
         .write("web/package.json", "{\"version\":\"3.4.5\"}");
 
-    let run = fx.run(&["patch", "--no-git"]);
+    let run = fx.run(&["patch", "--through", "none"]);
     assert_eq!(run.code, 3, "{}", run.output());
     assert!(run.stderr.contains("--project"), "{}", run.stderr);
 }
@@ -707,7 +791,7 @@ fn a_bump_reports_the_resulting_version_as_json() {
         .write("vump.toml", SINGLE)
         .write("VERSION", "1.2.3\n");
 
-    let value = fx.run(&["minor", "--no-git", "--json"]).json();
+    let value = fx.run(&["minor", "--through", "none", "--json"]).json();
 
     assert_eq!(value["ok"], true);
     assert_eq!(value["previous"], "1.2.3");
@@ -754,7 +838,7 @@ fn a_bump_moves_the_lock_file_in_the_same_commit() {
         .write("Cargo.lock", &lock("1.2.3"))
         .with_git();
 
-    let run = fx.run(&["patch", "--tag"]);
+    let run = fx.run(&["patch", "--through", "tag"]);
     assert_eq!(run.code, 0, "{}", run.output());
 
     assert!(fx.read("Cargo.toml").contains("version = \"1.2.4\""));
@@ -777,7 +861,7 @@ fn a_bump_leaves_dependency_versions_in_the_lock_alone() {
         .write("Cargo.toml", &manifest("1.2.3"))
         .write("Cargo.lock", &lock("1.2.3"));
 
-    assert_eq!(fx.run(&["minor", "--no-git"]).code, 0);
+    assert_eq!(fx.run(&["minor", "--through", "none"]).code, 0);
     assert!(
         fx.read("Cargo.lock")
             .contains("name = \"dep\"\nversion = \"1.0.0\"")
@@ -792,7 +876,7 @@ fn an_undeclared_lock_stops_the_run_before_anything_happens() {
         .write("Cargo.lock", &lock("1.2.3"))
         .with_git();
 
-    let run = fx.run(&["patch", "--tag"]);
+    let run = fx.run(&["patch", "--through", "tag"]);
 
     assert_eq!(run.code, 3, "{}", run.output());
     assert!(run.output().contains("Cargo.lock"), "{}", run.output());
@@ -824,7 +908,7 @@ fn set_repairs_a_manifest_and_lock_that_disagree() {
         .write("Cargo.toml", &manifest("1.2.3"))
         .write("Cargo.lock", &lock("1.2.2"));
 
-    assert_eq!(fx.run(&["set", "1.2.3", "--no-git"]).code, 0);
+    assert_eq!(fx.run(&["set", "1.2.3", "--through", "none"]).code, 0);
     assert!(
         fx.read("Cargo.lock")
             .contains("name = \"demo\"\nversion = \"1.2.3\"")
@@ -845,7 +929,7 @@ fn a_bump_moves_the_npm_lock_in_the_same_commit() {
         .write("package-lock.json", NPM_LOCK)
         .with_git();
 
-    let run = fx.run(&["minor", "--tag"]);
+    let run = fx.run(&["minor", "--through", "tag"]);
     assert_eq!(run.code, 0, "{}", run.output());
 
     let lock = fx.read("package-lock.json");
@@ -863,7 +947,7 @@ fn a_bump_leaves_npm_dependency_versions_alone() {
         .write("package.json", "{\"name\":\"demo\",\"version\":\"1.2.3\"}")
         .write("package-lock.json", NPM_LOCK);
 
-    assert_eq!(fx.run(&["patch", "--no-git"]).code, 0);
+    assert_eq!(fx.run(&["patch", "--through", "none"]).code, 0);
     assert!(fx.read("package-lock.json").contains("\"2.1.3\""));
 }
 
@@ -875,7 +959,7 @@ fn an_undeclared_npm_lock_stops_the_run_before_anything_happens() {
         .write("package-lock.json", NPM_LOCK)
         .with_git();
 
-    let run = fx.run(&["patch", "--tag"]);
+    let run = fx.run(&["patch", "--through", "tag"]);
 
     assert_eq!(run.code, 3, "{}", run.output());
     assert!(
@@ -911,7 +995,7 @@ fn a_yarn_lock_is_never_demanded() {
         .write("package.json", "{\"name\":\"demo\",\"version\":\"1.2.3\"}")
         .write("yarn.lock", "# yarn lockfile v1\n");
 
-    assert_eq!(fx.run(&["patch", "--no-git"]).code, 0);
+    assert_eq!(fx.run(&["patch", "--through", "none"]).code, 0);
 }
 
 /// Cargo's own output for a two-member workspace, shared with the unit tests.
@@ -940,7 +1024,7 @@ fn workspace(files: &str) -> Fixture {
 fn a_workspace_member_bumps_only_its_own_entry_in_the_shared_lock() {
     let fx = workspace("files = [\"crates/api/Cargo.toml\", \"Cargo.lock\"]\n");
 
-    let run = fx.run(&["minor", "--no-git"]);
+    let run = fx.run(&["minor", "--through", "none"]);
     assert_eq!(run.code, 0, "{}", run.output());
 
     let lock = fx.read("Cargo.lock");
@@ -963,7 +1047,11 @@ fn each_project_bumps_its_own_member_of_a_shared_lock() {
          [[project]]\nname = \"web\"\nfiles = [\"crates/web/Cargo.toml\", \"Cargo.lock\"]\n",
     );
 
-    assert_eq!(fx.run(&["patch", "--project", "web", "--no-git"]).code, 0);
+    assert_eq!(
+        fx.run(&["patch", "--project", "web", "--through", "none"])
+            .code,
+        0
+    );
 
     let lock = fx.read("Cargo.lock");
     assert!(
@@ -981,7 +1069,7 @@ fn an_undeclared_workspace_lock_stops_the_run() {
     // The lock sits at the workspace root, directories above the manifest.
     let fx = workspace("files = [\"crates/api/Cargo.toml\"]\n");
 
-    let run = fx.run(&["patch", "--no-git"]);
+    let run = fx.run(&["patch", "--through", "none"]);
     assert_eq!(run.code, 3, "{}", run.output());
     assert!(run.output().contains("Cargo.lock"), "{}", run.output());
     assert!(fx.read("crates/api/Cargo.toml").contains("1.0.0"));
@@ -1049,7 +1137,7 @@ fn taggable(git: &str) -> Fixture {
 
 #[test]
 fn tags_are_annotated_by_default() {
-    let fx = taggable("tag = true\n");
+    let fx = taggable("through = \"tag\"\n");
     assert_eq!(fx.run(&["patch"]).code, 0);
 
     // git's own answer: an annotated tag is a `tag` object, a lightweight one
@@ -1063,7 +1151,7 @@ fn tags_are_annotated_by_default() {
 
 #[test]
 fn a_lightweight_tag_is_available_on_request() {
-    let fx = taggable("tag = true\ntag_style = \"lightweight\"\n");
+    let fx = taggable("through = \"tag\"\ntag_style = \"lightweight\"\n");
     assert_eq!(fx.run(&["patch"]).code, 0);
 
     assert_eq!(fx.git_output(&["cat-file", "-t", "v1.2.4"]), "commit");
@@ -1071,7 +1159,7 @@ fn a_lightweight_tag_is_available_on_request() {
 
 #[test]
 fn a_tag_message_is_configurable() {
-    let fx = taggable("tag = true\ntag_message = \"cut {new_version}\"\n");
+    let fx = taggable("through = \"tag\"\ntag_message = \"cut {new_version}\"\n");
     assert_eq!(fx.run(&["patch"]).code, 0);
 
     assert_eq!(
@@ -1084,7 +1172,7 @@ fn a_tag_message_is_configurable() {
 fn an_unusual_tag_style_is_named_before_it_happens() {
     // Signing can fail on a machine without a key, and a lightweight tag is
     // weaker than a release usually wants; both are worth seeing in a dry run.
-    let fx = taggable("tag = true\ntag_style = \"lightweight\"\n");
+    let fx = taggable("through = \"tag\"\ntag_style = \"lightweight\"\n");
 
     let run = fx.run(&["patch", "--dry-run"]);
     assert!(run.stdout.contains("(lightweight)"), "{}", run.stdout);
@@ -1095,7 +1183,7 @@ fn an_unusual_tag_style_is_named_before_it_happens() {
 
 #[test]
 fn an_ordinary_annotated_tag_needs_no_remark() {
-    let fx = taggable("tag = true\n");
+    let fx = taggable("through = \"tag\"\n");
 
     let run = fx.run(&["patch", "--dry-run"]);
     assert!(
@@ -1117,7 +1205,7 @@ fn a_csproj_is_tracked_by_its_extension() {
         .write("vump.toml", "files = [\"Demo.csproj\"]\n")
         .write("Demo.csproj", CSPROJ);
 
-    let run = fx.run(&["minor", "--no-git"]);
+    let run = fx.run(&["minor", "--through", "none"]);
     assert_eq!(run.code, 0, "{}", run.output());
 
     let out = fx.read("Demo.csproj");
@@ -1138,7 +1226,11 @@ fn a_csproj_moves_in_step_with_other_tracked_files() {
         .write("VERSION", "1.2.3\n")
         .write("Demo.csproj", CSPROJ);
 
-    assert_eq!(fx.run(&["alpha", "--from", "patch", "--no-git"]).code, 0);
+    assert_eq!(
+        fx.run(&["alpha", "--from", "patch", "--through", "none"])
+            .code,
+        0
+    );
     assert_eq!(fx.read("VERSION"), "1.2.4-alpha.0\n");
     assert!(
         fx.read("Demo.csproj")
@@ -1191,5 +1283,69 @@ fn the_sandbox_projects_stay_usable() {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
+    }
+}
+
+#[test]
+fn no_sandbox_project_can_produce_a_release_shaped_tag() {
+    // These projects sit inside vump's own repository, so a tag made in one
+    // lands here. The release workflow triggers on `v*`, and `vump patch
+    // --through push` run in a sandbox directory by mistake once created a
+    // `v1.0.1` tag that looked exactly like a release of vump itself.
+    //
+    // Asserting on the rendered tag rather than on the configured pattern is
+    // deliberate: deleting the pattern silently restores the "v{new_version}"
+    // default, which is the very shape being excluded.
+    let sandbox = Path::new(env!("CARGO_MANIFEST_DIR")).join("sandbox");
+
+    for (project, select) in [
+        ("npm/single-project", None),
+        ("npm/multi-project", Some("project-a")),
+        ("cs/single-project", None),
+        ("cs/multi-project", Some("project-b")),
+    ] {
+        let mut args = vec!["patch", "--through", "tag", "--dry-run", "--json"];
+        if let Some(name) = select {
+            args.extend(["--project", name]);
+        }
+
+        let output = Command::new(env!("CARGO_BIN_EXE_vump"))
+            .args(&args)
+            .current_dir(sandbox.join(project))
+            .stdin(Stdio::null())
+            .output()
+            .expect("cannot run vump");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let value: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("{project}: {e}: {stdout}"));
+
+        let tags = collect_tags(&value);
+        assert!(!tags.is_empty(), "{project}: no tag in {stdout}");
+        for tag in tags {
+            assert!(
+                tag.starts_with("sandbox-"),
+                "{project}: tag {tag:?} must be prefixed so it cannot be taken \
+                 for a release of vump",
+            );
+        }
+    }
+}
+
+/// Every tag name anywhere in a JSON result.
+///
+/// The shape differs between a single project and several, and this assertion
+/// is about all of them regardless of where they sit.
+fn collect_tags(value: &serde_json::Value) -> Vec<String> {
+    match value {
+        serde_json::Value::Object(map) => map
+            .iter()
+            .flat_map(|(key, child)| match (key.as_str(), child.as_str()) {
+                ("tag", Some(name)) => vec![name.to_owned()],
+                _ => collect_tags(child),
+            })
+            .collect(),
+        serde_json::Value::Array(items) => items.iter().flat_map(collect_tags).collect(),
+        _ => Vec::new(),
     }
 }

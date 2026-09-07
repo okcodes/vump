@@ -108,9 +108,9 @@ pub fn plan_from(
 mod tests {
     use super::*;
     use crate::adapters::MemoryFileSystem;
+    use crate::app::change::GitPlan;
     use crate::app::change::TagPlan;
-    use crate::app::change::{GitIntent, GitPlan};
-    use crate::config::{DEFAULT_TAG_PATTERN, GitSettings};
+    use crate::config::{DEFAULT_TAG_PATTERN, GitSettings, GitThrough};
     use crate::domain::{StableBump, TagPattern};
     use crate::ports::Annotation;
 
@@ -139,12 +139,12 @@ mod tests {
     }
 
     fn planning<'a>(
-        intent: GitIntent,
+        through: GitThrough,
         settings: &'a GitSettings,
         tag: &'a TagPattern,
     ) -> GitPlanning<'a> {
         GitPlanning {
-            intent,
+            through,
             commit_message: &settings.commit_message,
             tag,
             tag_style: settings.tag_style,
@@ -163,7 +163,7 @@ mod tests {
             root(),
             &project(&["VERSION", "ui/package.json"]),
             Transition::Stable(StableBump::Patch),
-            planning(GitIntent::default(), &settings(), &default_pattern()),
+            planning(GitThrough::None, &settings(), &default_pattern()),
         )
         .unwrap();
 
@@ -182,7 +182,7 @@ mod tests {
             root(),
             &project(&["VERSION"]),
             Transition::Stable(StableBump::Major),
-            planning(GitIntent::default(), &settings(), &default_pattern()),
+            planning(GitThrough::None, &settings(), &default_pattern()),
         )
         .unwrap();
 
@@ -200,7 +200,7 @@ mod tests {
             root(),
             &project(&["VERSION", "Cargo.toml"]),
             Transition::Stable(StableBump::Patch),
-            planning(GitIntent::default(), &settings(), &default_pattern()),
+            planning(GitThrough::None, &settings(), &default_pattern()),
         )
         .unwrap_err();
 
@@ -225,7 +225,7 @@ mod tests {
             &project(&["VERSION", "Cargo.toml"]),
             Some(v("1.2.3")),
             Transition::Stable(StableBump::Patch),
-            planning(GitIntent::default(), &settings(), &default_pattern()),
+            planning(GitThrough::None, &settings(), &default_pattern()),
         )
         .unwrap();
 
@@ -242,7 +242,7 @@ mod tests {
             root(),
             &project(&["VERSION"]),
             Transition::Stable(StableBump::Patch),
-            planning(GitIntent::default(), &settings(), &default_pattern()),
+            planning(GitThrough::None, &settings(), &default_pattern()),
         )
         .unwrap_err();
 
@@ -258,15 +258,7 @@ mod tests {
             root(),
             &project(&["VERSION"]),
             Transition::Stable(StableBump::Minor),
-            planning(
-                GitIntent {
-                    commit: true,
-                    tag: true,
-                    push: false,
-                },
-                &settings(),
-                &default_pattern(),
-            ),
+            planning(GitThrough::Tag, &settings(), &default_pattern()),
         )
         .unwrap();
 

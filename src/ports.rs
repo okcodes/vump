@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+use crate::config::GitThrough;
+
 /// Filesystem access required by use cases.
 pub trait FileSystem {
     /// Reads a file as UTF-8 text.
@@ -82,15 +84,17 @@ pub trait Interaction {
         options: &[(String, String)],
     ) -> Result<usize, InteractionError>;
 
-    /// Asks which git side-effects to perform.
+    /// Asks how far to carry the release.
     ///
-    /// Asked only when configuration has not already decided.
+    /// Asked only when configuration has not already decided. It is one
+    /// question rather than three because the steps are cumulative: answering
+    /// "tag" has already answered "commit".
     ///
     /// # Errors
     ///
     /// Returns [`InteractionError`] when the question cannot be asked or is
     /// declined.
-    fn choose_git(&self) -> Result<GitChoice, InteractionError>;
+    fn choose_git(&self) -> Result<GitThrough, InteractionError>;
 
     /// Asks for final approval of a rendered summary.
     ///
@@ -99,21 +103,6 @@ pub trait Interaction {
     /// Returns [`InteractionError`] when the question cannot be asked or is
     /// declined.
     fn confirm(&self, summary: &str) -> Result<bool, InteractionError>;
-}
-
-/// Git side-effects offered as a single question.
-///
-/// Combining them avoids asking twice for what is really one decision.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GitChoice {
-    /// Write the files and stop.
-    None,
-    /// Commit the change.
-    Commit,
-    /// Commit and tag.
-    Tag,
-    /// Commit, tag and push.
-    TagAndPush,
 }
 
 /// Why a question could not be answered.

@@ -5,11 +5,12 @@
 # file moves — a <PackageReference Version="..."> belongs to a dependency, and
 # <AssemblyVersion> takes four numeric parts and cannot hold a pre-release.
 #
-# Git is off throughout the sandbox — see ../../npm/single-project/vump.toml.
+# Git is off throughout the sandbox, and the tag pattern cannot be mistaken
+# for vump's own — see ../../npm/single-project/vump.toml.
 
 files = ["Demo/Demo.csproj"]
 
 [git]
-commit = false
-tag = false
-push = false
+through = "none"
+tag_pattern = "sandbox-cs-v{new_version}"
+commit_message = "chore(sandbox): bump cs/single-project to {new_version}"
