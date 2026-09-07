@@ -243,14 +243,18 @@ pub fn check_nesting(
     };
 
     // Paths are shown relative to the repository the commit would land in,
-    // which is the frame the reader needs to see where they actually are.
+    // which is the frame the reader needs to see where they actually are, and
+    // with forward slashes on every platform to match how a path is written in
+    // vump.toml and reported by every other message.
     let base = outer.parent().unwrap_or(&outer);
     let inner = root.join(crate::config::FILE_NAME);
     let show = |path: &Path| {
         path.strip_prefix(base)
             .unwrap_or(path)
-            .display()
-            .to_string()
+            .components()
+            .map(|part| part.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/")
     };
 
     Err(ChangeError::NestedConfig {

@@ -472,6 +472,10 @@ fn a_nested_configuration_may_not_commit_without_acknowledgement() {
 
     // The message has to say where the caller actually is, or it reads as an
     // obstacle to get past rather than as a wrong turn.
+    //
+    // The forward slash is deliberate and asserted on every platform: paths are
+    // written that way in vump.toml, so a message that reported one back with a
+    // Windows separator would not match what the reader is looking at.
     assert!(run.stderr.contains("inner/vump.toml"), "{}", run.stderr);
     assert!(run.stderr.contains("[[project]]"), "{}", run.stderr);
 
