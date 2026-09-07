@@ -1285,3 +1285,67 @@ fn the_sandbox_projects_stay_usable() {
         );
     }
 }
+
+#[test]
+fn no_sandbox_project_can_produce_a_release_shaped_tag() {
+    // These projects sit inside vump's own repository, so a tag made in one
+    // lands here. The release workflow triggers on `v*`, and `vump patch
+    // --through push` run in a sandbox directory by mistake once created a
+    // `v1.0.1` tag that looked exactly like a release of vump itself.
+    //
+    // Asserting on the rendered tag rather than on the configured pattern is
+    // deliberate: deleting the pattern silently restores the "v{new_version}"
+    // default, which is the very shape being excluded.
+    let sandbox = Path::new(env!("CARGO_MANIFEST_DIR")).join("sandbox");
+
+    for (project, select) in [
+        ("npm/single-project", None),
+        ("npm/multi-project", Some("project-a")),
+        ("cs/single-project", None),
+        ("cs/multi-project", Some("project-b")),
+    ] {
+        let mut args = vec!["patch", "--through", "tag", "--dry-run", "--json"];
+        if let Some(name) = select {
+            args.extend(["--project", name]);
+        }
+
+        let output = Command::new(env!("CARGO_BIN_EXE_vump"))
+            .args(&args)
+            .current_dir(sandbox.join(project))
+            .stdin(Stdio::null())
+            .output()
+            .expect("cannot run vump");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let value: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("{project}: {e}: {stdout}"));
+
+        let tags = collect_tags(&value);
+        assert!(!tags.is_empty(), "{project}: no tag in {stdout}");
+        for tag in tags {
+            assert!(
+                tag.starts_with("sandbox-"),
+                "{project}: tag {tag:?} must be prefixed so it cannot be taken \
+                 for a release of vump",
+            );
+        }
+    }
+}
+
+/// Every tag name anywhere in a JSON result.
+///
+/// The shape differs between a single project and several, and this assertion
+/// is about all of them regardless of where they sit.
+fn collect_tags(value: &serde_json::Value) -> Vec<String> {
+    match value {
+        serde_json::Value::Object(map) => map
+            .iter()
+            .flat_map(|(key, child)| match (key.as_str(), child.as_str()) {
+                ("tag", Some(name)) => vec![name.to_owned()],
+                _ => collect_tags(child),
+            })
+            .collect(),
+        serde_json::Value::Array(items) => items.iter().flat_map(collect_tags).collect(),
+        _ => Vec::new(),
+    }
+}

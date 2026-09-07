@@ -4,8 +4,17 @@
 # own — they sit inside vump's — so a commit or tag made here would land in it.
 # "none" is a decision rather than silence, so an interactive run does not
 # offer to commit either.
+#
+# Every sandbox project also names its tag and its commit so neither can be
+# mistaken for vump's own. The release workflow triggers on tags matching `v*`,
+# so a tag accidentally made here — by passing --through tag or push, which
+# overrides the setting above — must not match that; the defaults would be
+# "v{new_version}" and "bump version to v{new_version}", which look exactly
+# like a release.
 
 files = ["package.json", "package-lock.json"]
 
 [git]
 through = "none"
+tag_pattern = "sandbox-npm-v{new_version}"
+commit_message = "chore(sandbox): bump npm/single-project to {new_version}"

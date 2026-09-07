@@ -16,8 +16,47 @@ starting point, not a specification — expect it to change while building.
 
 ## Ready to build
 
-Empty. Work arrives as an idea below and moves here once its problem is
-agreed, at which point it is ranked by value.
+### Refusing git work from a nested configuration
+
+A `vump.toml` inside a repository whose own `vump.toml` sits above it commits
+and tags into a repository it does not describe. `vump patch --through push`
+run in `sandbox/npm/single-project` created a `v1.0.1` commit and tag in vump's
+own repository, from a project versioned at 1.0.0 that has nothing to do with
+vump's version.
+
+Half of that has since been closed off: every sandbox configuration now carries
+a `tag_pattern` that cannot match the `v*` the release workflow triggers on, so
+an accidental tag can no longer impersonate a release. The structural half
+remains — a nested configuration can still write to a repository that is not
+its own.
+
+**Refused, not warned.** A warning is visible in an interactive run and useless
+everywhere else: a subcommand prints it into a log nobody is reading, and by the
+time a `through = "push"` run emits one the tag is already on the remote. This
+is the same reasoning that makes a release publishing no checksums a refusal —
+a warning on an irreversible path is not a safeguard.
+
+Nested configurations are legal, so the refusal needs an opt-out, and it belongs
+in the configuration rather than on the command line. Being nested is a standing
+fact about a repository's layout, not something someone wants a different answer
+to for a single run, which is the test a flag has to pass. The practical half
+matters more: a flag gets typed by the person in a hurry, who is exactly the
+person at risk, whereas a declaration in the file protects the sandbox **by
+omission** — those configurations simply never make it, so no `--through push`
+reaches git from them.
+
+The refusal applies only when the run would reach a commit. `through = "none"`
+touches nothing outside the working tree, and the sandbox has to stay pleasant
+to use for what it is for.
+
+Shape: after discovery, walk from the configuration's directory up to the git
+root looking for another `vump.toml`. If one is found and the run would commit,
+refuse with `Exit::Config`, naming the outer configuration and the key to add.
+Checked before anything is written, beside the undeclared-lock check.
+
+Undecided: the key's name, and whether it belongs at the top level or under
+`[git]`. `nested = true` reads as a declaration of fact, `allow_nested = true`
+as a grant of permission.
 
 ## Ideas, not yet decided
 

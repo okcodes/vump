@@ -4,11 +4,13 @@
 # both reach the same version, and a pushed tag would not say which package it
 # describes. One repository-wide template covers both.
 #
-# Git is off throughout the sandbox — see ../single-project/vump.toml.
+# Git is off throughout the sandbox, and the prefix keeps these out of the
+# namespace vump releases from — see ../single-project/vump.toml.
 
 [git]
 through = "none"
-tag_pattern = "{project}-v{new_version}"
+tag_pattern = "sandbox-npm-{project}-v{new_version}"
+commit_message = "chore(sandbox): bump npm/{project} to {new_version}"
 
 [[project]]
 name = "project-a"
