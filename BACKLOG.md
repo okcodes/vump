@@ -36,14 +36,32 @@ time a `through = "push"` run emits one the tag is already on the remote. This
 is the same reasoning that makes a release publishing no checksums a refusal —
 a warning on an irreversible path is not a safeguard.
 
-Nested configurations are legal, so the refusal needs an opt-out, and it belongs
-in the configuration rather than on the command line. Being nested is a standing
-fact about a repository's layout, not something someone wants a different answer
-to for a single run, which is the test a flag has to pass. The practical half
-matters more: a flag gets typed by the person in a hurry, who is exactly the
-person at risk, whereas a declaration in the file protects the sandbox **by
-omission** — those configurations simply never make it, so no `--through push`
-reaches git from them.
+Nested configurations are legal, so the refusal needs an opt-out, and it is a
+flag — `--allow-nested` — rather than a key in the nested file.
+
+A configuration key would settle the question once and stay settled, which is
+the failure mode: every later run from that directory is pre-approved, the
+accidental one included. The flag asks again every time, so the person who has
+forgotten which directory they are in is still stopped. Nobody re-reads a
+`vump.toml` before typing `vump`, and a permanent disarm is how a safeguard
+stops safeguarding.
+
+This is not the kind of setting the flag rule in [`DESIGN.md`](DESIGN.md)
+governs. That rule is about preferences with a default worth overriding for one
+run; this is an acknowledgement of a hazard vump has already detected, which is
+what `vump init --force` is too — and nothing would be gained by spelling that
+one `allow_overwrite = true` in a file.
+
+The friction argument against a flag does not survive either. It assumes people
+who routinely do git work from nested configurations, and the per-directory
+layout that would produce them is the one [`DESIGN.md`](DESIGN.md) argues
+against: projects are named in one configuration, not located by directory.
+
+**The error message is where the work happens.** It must name the configuration
+that was found, the outer one it sits under, and the repository the commit would
+land in, so that it reads as "wrong directory" rather than as an obstacle to get
+past. A refusal that only says what is forbidden invites reaching for the flag;
+one that says where you are invites `cd`.
 
 The refusal applies only when the run would reach a commit. `through = "none"`
 touches nothing outside the working tree, and the sandbox has to stay pleasant
@@ -51,12 +69,12 @@ to use for what it is for.
 
 Shape: after discovery, walk from the configuration's directory up to the git
 root looking for another `vump.toml`. If one is found and the run would commit,
-refuse with `Exit::Config`, naming the outer configuration and the key to add.
-Checked before anything is written, beside the undeclared-lock check.
+refuse with `Exit::Config`. Checked before anything is written, beside the
+undeclared-lock check.
 
-Undecided: the key's name, and whether it belongs at the top level or under
-`[git]`. `nested = true` reads as a declaration of fact, `allow_nested = true`
-as a grant of permission.
+Undecided: `--allow-nested` has to be global rather than sit with the other git
+flags, since those are on the bump subcommands only and a guided `vump` would
+otherwise have no way to proceed at all.
 
 ## Ideas, not yet decided
 
