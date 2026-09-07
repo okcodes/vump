@@ -60,6 +60,12 @@ much faster than waiting for a runner to report the same thing.
 
 - **Open a pull request when a coherent set of work is done, then pause for
   review.** A pull request is a checkpoint, not a formality.
+- **Propose the next version with the pull request.** Opening one is where a
+  change's maturity becomes legible, so name the version it should be tagged
+  as, justify it in a line or two against the rule in
+  [`CONTRIBUTING.md`](CONTRIBUTING.md), and give the exact command in its own
+  fenced `bash` block so it can be run without being retyped. Deciding this is
+  not work to hand back.
 - **Commit often.** Every commit compiles and passes tests on its own; branch
   history is preserved on merge, so each one stays readable forever.
 - **Verify locally in preference to CI.** Hosted runners are slow; use them to
