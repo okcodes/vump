@@ -32,6 +32,11 @@ Each is stated in full, with its reasoning and a worked example, in
   eventually disagree.
 - **Refuse rather than guess.** When vump cannot know, it fails with an
   actionable message. It never picks the likely option.
+- **One `vump.toml` per repository.** Several things versioning separately is
+  what `[[project]]` is for. A second configuration deeper in the same
+  repository is the mistake that feature exists to prevent, not a layout to
+  accommodate — do not weigh the convenience of anyone using one. The sandbox
+  is the sole deliberate exception, and it pays for it.
 - **Comments explain why, not what** — and never how the code came to be. No
   development history, no "previously", no narration of a discussion.
 - **Tracked files describe the tool, nothing else.** This repository is

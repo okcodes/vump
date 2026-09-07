@@ -129,6 +129,16 @@ vump status                 # every project at a glance
 Naming rather than locating projects is deliberate: the caller is frequently
 not sitting in the project's directory.
 
+**Use one `vump.toml` per repository.** If you are reaching for a second one in
+a subdirectory, `[[project]]` is what you want instead — it is the feature that
+question is asking for. A repository with configurations scattered through it
+cannot address a project by name, so `--project` stops working and every bump
+means `cd`-ing to the right place first; `vump status` can only report wherever
+you happen to be standing; and a pushed tag can no longer be traced back to the
+project that produced it. Git operations still run against the enclosing
+repository, so a nested configuration commits and tags into a repository it
+does not describe.
+
 ### Tagging independently-versioned projects
 
 Projects that move independently need distinguishable tags — otherwise they

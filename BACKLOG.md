@@ -52,10 +52,18 @@ run; this is an acknowledgement of a hazard vump has already detected, which is
 what `vump init --force` is too — and nothing would be gained by spelling that
 one `allow_overwrite = true` in a file.
 
-The friction argument against a flag does not survive either. It assumes people
-who routinely do git work from nested configurations, and the per-directory
-layout that would produce them is the one [`DESIGN.md`](DESIGN.md) argues
-against: projects are named in one configuration, not located by directory.
+The friction a flag adds is the point rather than a cost to be minimized.
+Nested configurations are not a layout to be accommodated: `[[project]]` exists
+precisely so that a repository holding several things needs only one
+configuration, and a repository that has grown a second one has given up
+addressing projects by name, `vump status` over the whole repository, and any
+way to trace a pushed tag back to its project. Having to type `--allow-nested`
+on every such run is a standing reminder that a first-class feature is going
+unused, and that the alternative to typing it is not typing it but restructuring
+the configuration.
+
+Which leaves the sandbox as the only nested configuration that should exist
+anywhere, kept because those projects are meant to be run against by hand.
 
 **The error message is where the work happens.** It must name the configuration
 that was found, the outer one it sits under, and the repository the commit would
