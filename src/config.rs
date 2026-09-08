@@ -258,7 +258,9 @@ pub enum ConfigError {
     },
 
     /// Several projects exist and none was selected.
-    #[error("this repository declares several projects; select one with --project <{available}>")]
+    #[error(
+        "this configuration declares several projects; select one with --project <{available}>"
+    )]
     ProjectRequired {
         /// Pipe-separated list of declared names.
         available: String,
@@ -273,7 +275,7 @@ pub enum ConfigError {
 
     /// A tag pattern names a project in a repository that has none.
     #[error(
-        "tag pattern {pattern:?} refers to a project name, but this repository declares a single unnamed project"
+        "tag pattern {pattern:?} refers to a project name, but this configuration declares a single unnamed project"
     )]
     ProjectPlaceholderUnavailable {
         /// The offending pattern.

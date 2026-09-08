@@ -21,23 +21,16 @@ use crate::config::Project;
 use crate::domain::version_file::{self, LockFile, Tracked, VersionFileError};
 use crate::ports::{FileSystem, FsError};
 
-/// The `vump.toml` above this one inside the same repository, if there is one.
+/// The nearest `vump.toml` above this one, if there is one.
 ///
-/// Discovery stops at the nearest configuration, so one deeper in a repository
-/// shadows the one describing the repository itself — while git still operates
-/// on the enclosing repository, which the shadowed configuration is the one
-/// describing. That combination is what lets a bump commit and tag against a
-/// project it has nothing to do with.
-///
-/// The search stops at the repository root. Beyond it a configuration belongs
-/// to a different repository entirely and says nothing about this one.
+/// The same upward walk configuration discovery performs, continued past the
+/// one it stopped at. Discovery takes the first it finds, so a configuration
+/// deeper in the tree shadows every one above it; asking what it shadowed is
+/// the same question asked one directory higher.
 #[must_use]
 pub fn outer_config(fs: &dyn FileSystem, root: &Path) -> Option<PathBuf> {
     let mut dir = root;
     loop {
-        if holds_git(fs, dir) {
-            return None;
-        }
         dir = dir.parent()?;
         let candidate = dir.join(crate::config::FILE_NAME);
         if fs.is_file(&candidate) {
@@ -53,10 +46,9 @@ pub fn outer_config(fs: &dyn FileSystem, root: &Path) -> Option<PathBuf> {
 /// own reads as `vump.toml`. With nothing above it, its own directory gives
 /// that second answer without needing a second rule.
 ///
-/// The frame is the configuration hierarchy rather than the repository, so that
-/// every message naming a configuration names it the same way. Git bounds the
-/// *search* — beyond a repository root a configuration describes something else
-/// — but it is not what a path is written relative to.
+/// The frame is the configuration hierarchy, so that every message naming a
+/// configuration names it the same way. Nothing about a repository enters it:
+/// which configuration is in effect is settled by the files themselves.
 ///
 /// Forward slashes on every platform: paths are written that way in
 /// `vump.toml`, so one reported back with a platform separator would not match
@@ -73,15 +65,6 @@ pub fn describe_config(fs: &dyn FileSystem, root: &Path) -> String {
         .map(|part| part.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
         .join("/")
-}
-
-/// Whether a directory is a repository root.
-///
-/// `.git` is a directory in an ordinary checkout and a file in a worktree or
-/// submodule, so the entry is matched by name rather than by kind.
-fn holds_git(fs: &dyn FileSystem, dir: &Path) -> bool {
-    fs.read_dir(dir)
-        .is_ok_and(|entries| entries.iter().any(|entry| entry.name == ".git"))
 }
 
 /// A version file and the version currently recorded in it.

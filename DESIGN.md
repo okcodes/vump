@@ -165,8 +165,9 @@ exist makes recovery cost a tag deletion, a reset, and a redone release.
 ## 3. Configuration
 
 A single `vump.toml`, discovered by walking upward from the working directory
-to the nearest one — the same way git locates `.git`. TOML is the only
-supported format.
+and taking the first one found. Nothing bounds that walk and nothing about a
+repository enters it: which configuration is in effect is settled by the files
+themselves. TOML is the only supported format.
 
 > **Rationale for TOML over YAML/JSON.** YAML's implicit typing is actively
 > hazardous for a tool whose entire purpose is exact version strings: `1.0`
@@ -255,8 +256,13 @@ neither can be mistaken for a release of vump.
 Treat "how do I make per-directory configurations work" as a question with a
 different answer: one `vump.toml`, several `[[project]]` entries.
 
-**Git work from a nested configuration is refused**, naming the outer
-configuration and pointing at `[[project]]`. Refused rather than warned, for the
+**Acting on a nested configuration is refused**, naming it and pointing at
+`[[project]]`. Nesting is decided by continuing the discovery walk past the
+configuration it stopped at: if another `vump.toml` lies above, the one in
+effect is shadowing it. That is the same walk, asked one directory higher, so
+the check can never disagree with the resolution it is checking — and it needs
+no notion of a repository, which is why a directory holding its own `.git`
+makes no difference to the answer. Refused rather than warned, for the
 same reason a release publishing no checksums is: a warning is visible in a
 guided run and useless everywhere else, and by the time one is printed about a
 pushed tag the tag is on the remote.

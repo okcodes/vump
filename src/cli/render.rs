@@ -136,11 +136,15 @@ pub fn status(projects: &[ProjectStatus], config: &str, json: bool) {
     println!("{config}");
 
     for (i, project) in projects.iter().enumerate() {
-        if i > 0 {
+        // A blank line detaches a file listing from the row above it, so it is
+        // earned when either this project or the previous one prints files.
+        // Between rows that are a single line each it would only add gaps.
+        let after_listing = i > 0 && !projects[i - 1].is_in_sync();
+        if after_listing || (i > 0 && !project.is_in_sync()) {
             println!();
         }
 
-        let label = project.name.as_deref().unwrap_or("(this repository)");
+        let label = project.name.as_deref().unwrap_or("(unnamed project)");
         match project.agreed_version() {
             Some(version) => println!("{}  {label}  {version}", marks.ok),
             None => println!("{}  {label}  files disagree", marks.fail),

@@ -191,19 +191,18 @@ pub enum ChangeError {
         changed: Vec<String>,
     },
 
-    /// A configuration nested inside another's repository was acted on.
+    /// A configuration nested below another was acted on.
     ///
     /// Refused rather than warned: by the time a warning about a pushed tag is
     /// printed, the tag is on the remote, and a warning above a `check` verdict
     /// does not stop the verdict being believed.
     #[error(
-        "{inner} sits inside a repository that another {file} describes, so this acts \
-         on the nested project rather than on the repository: a bump would commit and \
-         tag into the repository even so, and a check would answer about the wrong \
-         project.\n\n\
-         A repository holding several projects that version separately declares them \
-         as [[project]] entries in one {file}, which is what lets them be addressed \
-         by name from anywhere. Giving each its own {file} gives that up.\n\n\
+        "{inner} sits below another {file}, so this acts on the nested project rather \
+         than on the one above it: a bump would still commit and tag beyond what this \
+         {file} describes, and a check would answer about the wrong project.\n\n\
+         Several projects that version separately are declared as [[project]] entries \
+         in one {file}, which is what lets them be addressed by name from anywhere. \
+         Giving each its own {file} gives that up.\n\n\
          Pass --allow-nested to proceed anyway.",
         file = crate::config::FILE_NAME
     )]
@@ -226,7 +225,7 @@ fn format_disagreement(found: &[(String, Version)]) -> String {
         .join("\n")
 }
 
-/// Refuses to act on a configuration nested inside another's repository.
+/// Refuses to act on a configuration nested below another.
 ///
 /// Every command touching a project is covered, reading included. The hazard
 /// is not writing but using the wrong configuration at all: `check` answers
