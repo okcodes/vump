@@ -1424,6 +1424,154 @@ fn init_finds_a_csproj_and_skips_one_with_no_version() {
     assert!(!config.contains("Tools.csproj"), "{config}");
 }
 
+#[test]
+fn status_names_the_configuration_that_answered() {
+    // Discovery searches upward, so the report has to say which configuration
+    // produced it. Without this, the same output came back wherever it was run
+    // from, which is what made an accidental bump inside sandbox/ invisible.
+    let fx = Fixture::new()
+        .write("vump.toml", SINGLE)
+        .write("VERSION", "1.2.3\n")
+        .with_git();
+
+    let run = fx.run(&["status"]);
+    assert_eq!(run.code, 0, "{}", run.output());
+    assert!(run.stdout.contains("vump.toml"), "{}", run.stdout);
+}
+
+#[test]
+fn status_distinguishes_a_nested_configuration_from_the_repositorys_own() {
+    // The whole point: these two must not read alike. Relative to the working
+    // directory both would be "vump.toml", so the repository is the frame.
+    let fx = Fixture::new()
+        .write("vump.toml", SINGLE)
+        .write("VERSION", "1.2.3\n")
+        .write("inner/vump.toml", SINGLE)
+        .write("inner/VERSION", "9.9.9\n")
+        .with_git();
+
+    let outer = fx.run(&["status"]);
+    let inner = fx.run_in("inner", &["status", "--allow-nested"]);
+
+    assert_eq!(outer.stdout.lines().next(), Some("vump.toml"));
+    assert_eq!(inner.stdout.lines().next(), Some("inner/vump.toml"));
+}
+
+#[test]
+fn status_reports_the_configuration_as_json_too() {
+    // Neither rendering may carry information the other lacks.
+    let fx = Fixture::new()
+        .write("vump.toml", SINGLE)
+        .write("VERSION", "1.2.3\n")
+        .write("inner/vump.toml", SINGLE)
+        .write("inner/VERSION", "9.9.9\n")
+        .with_git();
+
+    let value = fx
+        .run_in("inner", &["status", "--json", "--allow-nested"])
+        .json();
+    assert_eq!(value["config"], "inner/vump.toml");
+}
+
+#[test]
+fn status_outside_a_repository_still_names_the_configuration() {
+    // Reading versions never needed git, and naming the configuration does not
+    // either: the frame is the configuration above this one, and with none
+    // there is nothing to be relative to.
+    let fx = Fixture::new()
+        .write("vump.toml", SINGLE)
+        .write("VERSION", "1.2.3\n");
+
+    let run = fx.run(&["status"]);
+    assert_eq!(run.code, 0, "{}", run.output());
+    assert_eq!(run.stdout.lines().next(), Some("vump.toml"));
+}
+
+#[test]
+fn a_project_with_no_name_is_not_called_a_repository() {
+    // A configuration describes projects, and a repository may hold several
+    // configurations describing different things — so naming the one in effect
+    // after the repository asserts a scope it does not have.
+    let fx = Fixture::new()
+        .write("vump.toml", SINGLE)
+        .write("VERSION", "1.2.3\n");
+
+    let run = fx.run(&["status"]);
+    assert!(run.stdout.contains("(unnamed project)"), "{}", run.stdout);
+    assert!(!run.stdout.contains("repository"), "{}", run.stdout);
+}
+
+#[test]
+fn projects_are_separated_only_where_files_are_listed() {
+    // The blank line detaches a file listing from the row above it. Between
+    // rows that are a single line each it separates nothing.
+    let fx = Fixture::new()
+        .write("vump.toml", MULTI)
+        .write("api/Cargo.toml", "[package]\nversion = \"1.0.0\"\n")
+        .write("web/package.json", "{\"version\":\"3.4.5\"}");
+
+    let agreed = fx.run(&["status"]);
+    assert_eq!(agreed.code, 0, "{}", agreed.output());
+    assert!(!agreed.stdout.contains("\n\n"), "{:?}", agreed.stdout);
+
+    // One project disagreeing brings the listing back, and the separator with
+    // it: without the blank line the rows would run into the file list.
+    let fx = fx.write("api/Cargo.toml", "[package]\nversion = \"1.0.0\"\n");
+    let fx = fx.write(
+        "vump.toml",
+        "[[project]]\nname = \"api\"\nfiles = [\"api/Cargo.toml\", \"api/VERSION\"]\n\n         [[project]]\nname = \"web\"\nfiles = [\"web/package.json\"]\n",
+    );
+    let fx = fx.write("api/VERSION", "9.9.9\n");
+
+    let split = fx.run(&["status"]);
+    assert_eq!(split.code, 5, "{}", split.output());
+    assert!(split.stdout.contains("\n\n"), "{:?}", split.stdout);
+}
+
+#[test]
+fn a_configuration_and_the_refusal_name_it_the_same_way() {
+    // Two messages describing one file must not spell it differently. They
+    // once did: the refusal was relative to the outer configuration and status
+    // to the repository root, which agree until they do not.
+    let fx = Fixture::new()
+        .write("vump.toml", SINGLE)
+        .write("VERSION", "1.2.3\n")
+        .write("inner/vump.toml", SINGLE)
+        .write("inner/VERSION", "9.9.9\n")
+        .with_git();
+
+    let named = fx.run_in("inner", &["status", "--allow-nested"]);
+    let refused = fx.run_in("inner", &["status"]);
+
+    let path = named.stdout.lines().next().expect("status names it");
+    assert_eq!(path, "inner/vump.toml");
+    assert!(
+        refused.stderr.starts_with(&format!("error: {path} ")),
+        "{}",
+        refused.stderr
+    );
+}
+
+#[test]
+fn a_repository_of_its_own_does_not_excuse_a_nested_configuration() {
+    // Nesting is a question about configurations, so the answer does not turn
+    // on what the directory is to git. Two stacked configurations still cost
+    // name addressing and a single tag namespace, which is what the refusal
+    // points at — and the check reads the same files discovery does.
+    let fx = Fixture::new()
+        .write("vump.toml", SINGLE)
+        .write("VERSION", "1.2.3\n")
+        .write("inner/vump.toml", SINGLE)
+        .write("inner/VERSION", "9.9.9\n")
+        .with_git();
+
+    assert_eq!(fx.run_in("inner", &["status"]).code, 3);
+
+    fx.git_in("inner", &["init", "-q", "."]);
+    assert_eq!(fx.run_in("inner", &["status"]).code, 3);
+    assert_eq!(fx.run_in("inner", &["status", "--allow-nested"]).code, 0);
+}
+
 // ─── Sandbox ─────────────────────────────────────────────────────────────────
 
 #[test]

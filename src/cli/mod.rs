@@ -382,7 +382,7 @@ fn execute(cli: &Cli) -> Result<Exit, CliError> {
         _ => {}
     }
 
-    let (root, config) = Config::discover(&cwd)?;
+    let (root, config) = app::discover(&RealFileSystem, &cwd)?;
 
     // Every command acting on a project is covered, before any of them runs.
     // One gate at the point configuration becomes known, rather than a check
@@ -795,7 +795,11 @@ fn status(ctx: &Context) -> Result<Exit, CliError> {
     };
 
     let statuses = app::status::status(&ctx.fs, &ctx.root, target)?;
-    render::status(&statuses, ctx.json);
+    render::status(
+        &statuses,
+        &app::describe_config(&ctx.fs, &ctx.root),
+        ctx.json,
+    );
 
     Ok(
         if statuses.iter().all(app::status::ProjectStatus::is_in_sync) {

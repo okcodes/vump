@@ -191,27 +191,24 @@ pub enum ChangeError {
         changed: Vec<String>,
     },
 
-    /// A configuration nested inside another's repository was acted on.
+    /// A configuration nested below another was acted on.
     ///
     /// Refused rather than warned: by the time a warning about a pushed tag is
     /// printed, the tag is on the remote, and a warning above a `check` verdict
     /// does not stop the verdict being believed.
     #[error(
-        "{inner} sits inside a repository that {outer} describes, so this acts on the \
-         nested project rather than on the repository: a bump would commit and tag \
-         into the repository even so, and a check would answer about the wrong \
-         project.\n\n\
-         A repository holding several projects that version separately declares them \
-         as [[project]] entries in one {file}, which is what lets them be addressed \
-         by name from anywhere. Giving each its own {file} gives that up.\n\n\
+        "{inner} sits below another {file}, so this acts on the nested project rather \
+         than on the one above it: a bump would still commit and tag beyond what this \
+         {file} describes, and a check would answer about the wrong project.\n\n\
+         Several projects that version separately are declared as [[project]] entries \
+         in one {file}, which is what lets them be addressed by name from anywhere. \
+         Giving each its own {file} gives that up.\n\n\
          Pass --allow-nested to proceed anyway.",
         file = crate::config::FILE_NAME
     )]
     NestedConfig {
-        /// The configuration in effect, relative to the outer one.
+        /// The configuration in effect, named as every message names one.
         inner: String,
-        /// The configuration describing the repository.
-        outer: String,
     },
 
     /// A git operation failed.
@@ -228,7 +225,7 @@ fn format_disagreement(found: &[(String, Version)]) -> String {
         .join("\n")
 }
 
-/// Refuses to act on a configuration nested inside another's repository.
+/// Refuses to act on a configuration nested below another.
 ///
 /// Every command touching a project is covered, reading included. The hazard
 /// is not writing but using the wrong configuration at all: `check` answers
@@ -257,28 +254,12 @@ pub fn check_nesting(
     if nesting == Nesting::Allowed {
         return Ok(());
     }
-    let Some(outer) = crate::app::outer_config(fs, root) else {
+    if crate::app::outer_config(fs, root).is_none() {
         return Ok(());
-    };
-
-    // Paths are shown relative to the repository the write would land in,
-    // which is the frame the reader needs to see where they actually are, and
-    // with forward slashes on every platform to match how a path is written in
-    // vump.toml and reported by every other message.
-    let base = outer.parent().unwrap_or(&outer);
-    let inner = root.join(crate::config::FILE_NAME);
-    let show = |path: &Path| {
-        path.strip_prefix(base)
-            .unwrap_or(path)
-            .components()
-            .map(|part| part.as_os_str().to_string_lossy())
-            .collect::<Vec<_>>()
-            .join("/")
-    };
+    }
 
     Err(ChangeError::NestedConfig {
-        inner: show(&inner),
-        outer: show(&outer),
+        inner: crate::app::describe_config(fs, root),
     })
 }
 

@@ -48,7 +48,7 @@ needs, or it fails saying what is missing.
 | `vump release` | Drop the pre-release suffix |
 | `vump set <version>` | Write an exact version to every tracked file |
 | `vump check <version>` | Verify tracked files record this version |
-| `vump status` | Report recorded versions and whether they agree |
+| `vump status` | Report recorded versions, whether they agree, and which `vump.toml` answered |
 | `vump init` | Create a `vump.toml` |
 | `vump self update` | Install a published release |
 | `vump self status` | Running version, and whether a newer one exists |

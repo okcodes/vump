@@ -31,8 +31,24 @@ code — it is the same `MSBuild` XML.
 
 What is undecided is what happens when a project underneath also declares its
 own `<Version>`, which overrides the inherited one. Tracking both would mean
-vump writing two files that disagree by design. Needs a real solution in hand
-rather than a guess at which layer wins.
+vump writing two files that disagree by design.
+
+The reason this waited — "needs a real solution in hand rather than a guess at
+which layer wins" — no longer holds. `sandbox/cs/multi-project` is a real
+solution, so which layer wins is a question `dotnet build` can be made to
+answer rather than one to reason about: add a `Directory.Build.props` carrying
+a `<Version>`, let one project beneath it declare its own, and read what each
+assembly ends up with.
+
+What that leaves is a design question rather than an unknown. Probably: track
+the props file *or* the projects, never both, and refuse a configuration
+declaring a project whose version an ancestor overrides — the same shape as
+refusing a manifest and lock that disagree.
+
+The versioning model itself was checked against .NET 10 and needs nothing new:
+`<Version>`, `<VersionPrefix>` and `<VersionSuffix>` are unchanged, and
+`Directory.Packages.props` centralizes *dependency* versions, which is a
+different file and not this.
 
 ### Deriving the version from git tags instead of files
 
@@ -55,9 +71,19 @@ deriving a version from a tag for anyone who wants that direction.
 ### Python projects
 
 `pyproject.toml` holds `[project].version`, which is the same in-place TOML
-edit vump already performs. What is undecided is `uv`: it keeps a `uv.lock`
-that records the project's own version, so the lock question arrives with it,
-and whether `uv` rewrites more of that file than the version is unverified.
+edit vump already performs. What is undecided is `uv`, which is the tool that
+would be used here: it keeps a `uv.lock` recording the project's own version,
+so the lock question arrives with it.
+
+Settling it is an experiment, not a discussion, and the same one that settled
+npm and Cargo: put a project in `sandbox/py/`, bump the version by hand, run
+`uv lock`, and diff. If the only change is the project's own version, the lock
+is trackable on exactly the terms `Cargo.lock` and `package-lock.json` are —
+computable with no network and no knowledge of the dependency graph. If `uv`
+rewrites more than that, it is not, and `pyproject.toml` is tracked alone.
+
+Low priority by the only measure that matters here: barely any Python is
+written in this repository's orbit, so it waits behind formats that are.
 
 ### npm workspaces
 
@@ -103,28 +129,43 @@ consumers are known to have `gh` available.
 every time. Persisting it needs installation-level state — a config directory
 vump otherwise has no need for — which one setting does not obviously justify.
 
-### Reporting which configuration is in effect
+### A Rust project in the sandbox
 
-`vump status` prints versions and whether they agree, but never says which
-`vump.toml` produced them. Configuration is discovered by searching upward, so
-the answer is not always the directory the caller is standing in, and the
-output of a single-project repository — `OK (this repository) 1.0.0` — looks
-identical wherever it was run from.
+The sandbox covers npm and C#. Rust is missing, and the argument at the time
+was that this repository is itself the Cargo example — it tracks `Cargo.toml`
+and `Cargo.lock` and is exercised on every release.
 
-The motivating case is the accidental bump inside `sandbox/`: `status` was the
-cheap way to notice the mistake first, except that what it printed gave no
-indication of where it was reading from. Advising people to run it beforehand
-is worth little while it withholds the one fact that would settle the question.
+That argument is weaker than it looked. The repository demonstrates a
+single-crate project only, so the shape actually worth showing by hand — a
+workspace, where the lock holds one entry per member and a project writes only
+the entries its own manifests name — has no worked example anywhere outside the
+test fixtures.
 
-Undecided only in how much to print — the path alone, relative to the working
-directory, is probably enough, and belongs in `status` rather than on every
-command.
+The reason not to rush: a crate inside this repository's tree is not inert the
+way an npm or C# project is. It would need excluding from the workspace, and a
+mistake there breaks `cargo build` for the tool itself.
+
+### Reporting the configuration on more than status
+
+`status` names the configuration that answered it. `check` does not, and its
+verdict is the one that gets believed: a CI log saying only "1.2.3 matches"
+does not record *which* project it matched.
+
+Left out because the nested refusal already closes the case that motivated it,
+and a repository with a single configuration has no ambiguity to report. Worth
+revisiting if a CI log ever has to be read back to work out what was verified.
 
 ### Inputs on the check action
 
 The composite action takes `version`, `config` and `vump-version`. Passing a
 tag now selects its own project, so a `project` input is only needed for a
 repository that verifies bare versions rather than tags.
+
+There is no `allow-nested` input either, so a repository whose `config` input
+points at a nested `vump.toml` now fails in CI. That is arguably the right
+outcome — it surfaces the layout rather than verifying quietly against the
+wrong project — but it is a consequence that was not chosen deliberately, and
+the alternative is one input.
 
 ### Pushing what a bump created, separately
 
@@ -211,6 +252,20 @@ the same reason.
 They record a dependency graph, and a version bump does not change one. An
 earlier advisory named them anyway, which meant telling people to run an
 install that would change nothing.
+
+### Announcing that a flag overrode configuration
+
+Proposed when flags became two-directional: if `vump.toml` says `through =
+"push"` and `--through tag` is passed, should the run say so?
+
+No. Output reports the effective plan, never where each decision came from. The
+flag is in the command the caller just typed, the result already names the
+commit, the tag and the push outcome, and `--dry-run` exists for asking in
+advance. "Configuration was overridden" is a notice with no action attached to
+it, which is the same test that governs error messages.
+
+The guided run needs it least of all: it takes no git flags, so nothing there
+can be overridden.
 
 ### A saved plan-then-apply workflow
 

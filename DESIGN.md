@@ -165,8 +165,9 @@ exist makes recovery cost a tag deletion, a reset, and a redone release.
 ## 3. Configuration
 
 A single `vump.toml`, discovered by walking upward from the working directory
-to the nearest one — the same way git locates `.git`. TOML is the only
-supported format.
+and taking the first one found. Nothing bounds that walk and nothing about a
+repository enters it: which configuration is in effect is settled by the files
+themselves. TOML is the only supported format.
 
 > **Rationale for TOML over YAML/JSON.** YAML's implicit typing is actively
 > hazardous for a tool whose entire purpose is exact version strings: `1.0`
@@ -210,7 +211,20 @@ per-directory config files cannot express "bump the project called `api`"
 without first knowing where `api` lives.
 
 `vump status` with no project selected reports every declared project and
-whether its files agree.
+whether its files agree, and names the configuration that answered.
+
+Naming it matters because discovery searches upward: the file is not always in
+the directory the caller is standing in, and a report that omits it looks the
+same from everywhere.
+
+**A configuration is named relative to the configuration above it**, which is
+the same frame the nesting refusal uses — one file described one way, whatever
+message describes it. So `sandbox/npm/single-project/vump.toml` says where it
+is, and `vump.toml` says it is the repository's own. Relative to the working
+directory both would read `vump.toml`, which is the ambiguity being removed;
+relative to the repository root would need git for a question that has nothing
+to do with git, and would part company with the refusal's frame the moment a
+repository's outermost configuration was not at its root.
 
 #### One configuration per repository
 
@@ -242,8 +256,13 @@ neither can be mistaken for a release of vump.
 Treat "how do I make per-directory configurations work" as a question with a
 different answer: one `vump.toml`, several `[[project]]` entries.
 
-**Git work from a nested configuration is refused**, naming the outer
-configuration and pointing at `[[project]]`. Refused rather than warned, for the
+**Acting on a nested configuration is refused**, naming it and pointing at
+`[[project]]`. Nesting is decided by continuing the discovery walk past the
+configuration it stopped at: if another `vump.toml` lies above, the one in
+effect is shadowing it. That is the same walk, asked one directory higher, so
+the check can never disagree with the resolution it is checking — and it needs
+no notion of a repository, which is why a directory holding its own `.git`
+makes no difference to the answer. Refused rather than warned, for the
 same reason a release publishing no checksums is: a warning is visible in a
 guided run and useless everywhere else, and by the time one is printed about a
 pushed tag the tag is on the remote.
@@ -528,14 +547,17 @@ demonstrably reusable outside this binary.
 ```
 src/
   domain/     Pure logic. No I/O, no clock, no environment.
-              Version state machine, bump planning, sync analysis.
-  ports/      Traits describing what the domain needs from the world.
-              VersionFile, Vcs, ConfigSource, Interaction, ReleaseSource.
+              Version state machine, bump planning, version file formats.
+  config.rs   Configuration as plain data: parsing and validation.
+              No I/O — a test builds the value it wants directly.
+  ports.rs    Traits describing what use cases need from the world.
+              FileSystem, Vcs, Interaction, ReleaseSource.
   adapters/   Concrete implementations of the ports.
-              Filesystem version files, git via subprocess, TOML config,
-              terminal prompts, GitHub releases.
-  app/        Use cases wiring ports together: Bump, Check, Status, Init, Update.
-              This is the layer worth testing hardest.
+              Real filesystem, git via subprocess, terminal prompts,
+              GitHub releases, and in-memory doubles for tests.
+  app/        Use cases wiring ports together: Bump, Check, Status, Init,
+              Update, and locating configuration. The layer worth testing
+              hardest.
   cli/        clap definitions, adapter selection, output rendering.
 ```
 
@@ -545,6 +567,12 @@ Rules that keep the boundaries real:
   needs to read a file or know the time, the design is wrong.
 - `app` depends on `domain` and `ports`, never on `adapters`. Use cases are
   constructed with port implementations supplied by `cli`.
+- **Only `adapters` names `std::fs`.** Everything above it reaches the
+  filesystem through the `FileSystem` port, discovery included — finding
+  `vump.toml` is a use case (`app::discover`) rather than something
+  configuration does for itself. That is what lets discovery be exercised
+  against an in-memory tree, and it keeps `config.rs` free of the I/O its own
+  documentation says it has none of.
 - A single `ChangeSet` value is the input to the human renderer, the JSON
   renderer, and `--dry-run` alike. Those three must not compute anything
   themselves. Bumping and setting differ only in how they reach a target
