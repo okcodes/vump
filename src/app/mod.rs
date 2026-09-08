@@ -17,26 +17,65 @@ use std::path::{Path, PathBuf};
 use semver::Version;
 use thiserror::Error;
 
-use crate::config::Project;
+use crate::config::{Config, ConfigError, Project};
 use crate::domain::version_file::{self, LockFile, Tracked, VersionFileError};
 use crate::ports::{FileSystem, FsError};
 
-/// The nearest `vump.toml` above this one, if there is one.
+/// The nearest `vump.toml` at or above `from`.
 ///
-/// The same upward walk configuration discovery performs, continued past the
-/// one it stopped at. Discovery takes the first it finds, so a configuration
-/// deeper in the tree shadows every one above it; asking what it shadowed is
-/// the same question asked one directory higher.
+/// The only upward walk in the program. Both questions asked about
+/// configuration are this one walk started from different places — which
+/// configuration governs a directory, and what that configuration shadowed —
+/// so they share the implementation rather than each keeping a copy. Two
+/// copies is what let them drift into disagreeing about where to stop.
+///
+/// Nothing bounds the walk. A repository root would bound it, but that is a
+/// question about version control, and which file governs a directory is not.
+#[must_use]
+pub fn locate(fs: &dyn FileSystem, from: &Path) -> Option<PathBuf> {
+    from.ancestors()
+        .map(|dir| dir.join(crate::config::FILE_NAME))
+        .find(|candidate| fs.is_file(candidate))
+}
+
+/// Loads the configuration governing `start`.
+///
+/// Returns the directory containing the file alongside the parsed
+/// configuration. Paths declared in the configuration are relative to that
+/// directory, not to the working directory.
+///
+/// # Errors
+///
+/// Returns a [`ConfigError`] when no configuration is found at or above
+/// `start`, or when the one found is unreadable or invalid.
+pub fn discover(fs: &dyn FileSystem, start: &Path) -> Result<(PathBuf, Config), ConfigError> {
+    let Some(file) = locate(fs, start) else {
+        return Err(ConfigError::NotFound {
+            start: start.to_path_buf(),
+        });
+    };
+
+    let text = fs.read(&file).map_err(|e| ConfigError::Unreadable {
+        path: file.clone(),
+        detail: e.to_string(),
+    })?;
+    let config = Config::parse(&file, &text)?;
+
+    // The directory, not the file: declared paths resolve against it.
+    let root = file
+        .parent()
+        .map_or_else(|| start.to_path_buf(), Path::to_path_buf);
+    Ok((root, config))
+}
+
+/// The nearest `vump.toml` above the one in `root`, if there is one.
+///
+/// Discovery takes the first configuration it finds, so one deeper in the tree
+/// shadows every one above it. Asking what it shadowed is the same search,
+/// started one directory higher.
 #[must_use]
 pub fn outer_config(fs: &dyn FileSystem, root: &Path) -> Option<PathBuf> {
-    let mut dir = root;
-    loop {
-        dir = dir.parent()?;
-        let candidate = dir.join(crate::config::FILE_NAME);
-        if fs.is_file(&candidate) {
-            return Some(candidate);
-        }
-    }
+    locate(fs, root.parent()?)
 }
 
 /// How a configuration's path is written when it has to be named.
@@ -288,6 +327,63 @@ mod tests {
             files: files.iter().map(|s| (*s).to_owned()).collect(),
             tag_pattern: None,
         }
+    }
+
+    #[test]
+    fn discovery_takes_the_nearest_configuration() {
+        let fs = MemoryFileSystem::new()
+            .with_file("/repo/vump.toml", "files = [\"VERSION\"]\n")
+            .with_file("/repo/inner/vump.toml", "files = [\"VERSION\"]\n");
+
+        let (root, _) = discover(&fs, Path::new("/repo/inner/src")).unwrap();
+        assert_eq!(root, Path::new("/repo/inner"));
+    }
+
+    #[test]
+    fn discovery_walks_up_until_it_finds_one() {
+        let fs = MemoryFileSystem::new().with_file("/repo/vump.toml", "files = [\"VERSION\"]\n");
+
+        let (root, _) = discover(&fs, Path::new("/repo/a/b/c")).unwrap();
+        assert_eq!(root, Path::new("/repo"));
+    }
+
+    #[test]
+    fn no_configuration_anywhere_is_reported_as_missing() {
+        let fs = MemoryFileSystem::new();
+        let err = discover(&fs, Path::new("/repo/a")).unwrap_err();
+        assert!(matches!(err, ConfigError::NotFound { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn an_outer_configuration_is_the_same_search_started_higher() {
+        // The two questions asked about configuration are one walk from two
+        // starting points, so they cannot disagree about where a search stops.
+        let fs = MemoryFileSystem::new()
+            .with_file("/repo/vump.toml", "files = [\"VERSION\"]\n")
+            .with_file("/repo/inner/vump.toml", "files = [\"VERSION\"]\n");
+
+        let inner = Path::new("/repo/inner");
+        assert_eq!(locate(&fs, inner).unwrap(), inner.join("vump.toml"));
+        assert_eq!(
+            outer_config(&fs, inner).unwrap(),
+            Path::new("/repo/vump.toml")
+        );
+        assert_eq!(outer_config(&fs, Path::new("/repo")), None);
+    }
+
+    #[test]
+    fn nesting_does_not_depend_on_version_control() {
+        // Nothing bounds the walk, so a directory that git would call a
+        // repository root reads exactly like any other directory.
+        let fs = MemoryFileSystem::new()
+            .with_file("/repo/vump.toml", "files = [\"VERSION\"]\n")
+            .with_file("/repo/inner/.git/HEAD", "ref: refs/heads/main\n")
+            .with_file("/repo/inner/vump.toml", "files = [\"VERSION\"]\n");
+
+        assert_eq!(
+            outer_config(&fs, Path::new("/repo/inner")).unwrap(),
+            Path::new("/repo/vump.toml")
+        );
     }
 
     #[test]

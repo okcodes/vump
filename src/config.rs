@@ -5,8 +5,9 @@
 //! there is nothing behavioral to substitute in a test — a test simply builds
 //! the value it wants.
 //!
-//! Parsing is separated from discovery so the interesting part, validation,
-//! needs no filesystem.
+//! Locating the file is a use case's job rather than this module's: that is
+//! filesystem work, and it reaches the outside world through a port. What is
+//! left here is parsing and validation, which need no filesystem at all.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -373,36 +374,6 @@ impl Config {
         Ok(Self {
             git: raw.git.into(),
             projects,
-        })
-    }
-
-    /// Finds the nearest `vump.toml`, searching `start` and then each ancestor.
-    ///
-    /// Returns the directory containing the file alongside the parsed
-    /// configuration. File paths in the configuration are relative to that
-    /// directory, not to the working directory.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`ConfigError`] when no configuration exists above `start`, or
-    /// when the one found is unreadable or invalid.
-    pub fn discover(start: &Path) -> Result<(PathBuf, Self), ConfigError> {
-        for dir in start.ancestors() {
-            let candidate = dir.join(FILE_NAME);
-            if !candidate.is_file() {
-                continue;
-            }
-            let text =
-                std::fs::read_to_string(&candidate).map_err(|e| ConfigError::Unreadable {
-                    path: candidate.clone(),
-                    detail: e.to_string(),
-                })?;
-            let config = Self::parse(&candidate, &text)?;
-            return Ok((dir.to_path_buf(), config));
-        }
-
-        Err(ConfigError::NotFound {
-            start: start.to_path_buf(),
         })
     }
 

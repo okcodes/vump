@@ -382,7 +382,7 @@ fn execute(cli: &Cli) -> Result<Exit, CliError> {
         _ => {}
     }
 
-    let (root, config) = Config::discover(&cwd)?;
+    let (root, config) = app::discover(&RealFileSystem, &cwd)?;
 
     // Every command acting on a project is covered, before any of them runs.
     // One gate at the point configuration becomes known, rather than a check

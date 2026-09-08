@@ -547,14 +547,17 @@ demonstrably reusable outside this binary.
 ```
 src/
   domain/     Pure logic. No I/O, no clock, no environment.
-              Version state machine, bump planning, sync analysis.
-  ports/      Traits describing what the domain needs from the world.
-              VersionFile, Vcs, ConfigSource, Interaction, ReleaseSource.
+              Version state machine, bump planning, version file formats.
+  config.rs   Configuration as plain data: parsing and validation.
+              No I/O — a test builds the value it wants directly.
+  ports.rs    Traits describing what use cases need from the world.
+              FileSystem, Vcs, Interaction, ReleaseSource.
   adapters/   Concrete implementations of the ports.
-              Filesystem version files, git via subprocess, TOML config,
-              terminal prompts, GitHub releases.
-  app/        Use cases wiring ports together: Bump, Check, Status, Init, Update.
-              This is the layer worth testing hardest.
+              Real filesystem, git via subprocess, terminal prompts,
+              GitHub releases, and in-memory doubles for tests.
+  app/        Use cases wiring ports together: Bump, Check, Status, Init,
+              Update, and locating configuration. The layer worth testing
+              hardest.
   cli/        clap definitions, adapter selection, output rendering.
 ```
 
@@ -564,6 +567,12 @@ Rules that keep the boundaries real:
   needs to read a file or know the time, the design is wrong.
 - `app` depends on `domain` and `ports`, never on `adapters`. Use cases are
   constructed with port implementations supplied by `cli`.
+- **Only `adapters` names `std::fs`.** Everything above it reaches the
+  filesystem through the `FileSystem` port, discovery included — finding
+  `vump.toml` is a use case (`app::discover`) rather than something
+  configuration does for itself. That is what lets discovery be exercised
+  against an in-memory tree, and it keeps `config.rs` free of the I/O its own
+  documentation says it has none of.
 - A single `ChangeSet` value is the input to the human renderer, the JSON
   renderer, and `--dry-run` alike. Those three must not compute anything
   themselves. Bumping and setting differ only in how they reach a target
