@@ -78,34 +78,6 @@ pub fn outer_config(fs: &dyn FileSystem, root: &Path) -> Option<PathBuf> {
     locate(fs, root.parent()?)
 }
 
-/// How a configuration's path is written when it has to be named.
-///
-/// Relative to the configuration above it when there is one, so that a nested
-/// file reads as `sandbox/npm/single-project/vump.toml` while a repository's
-/// own reads as `vump.toml`. With nothing above it, its own directory gives
-/// that second answer without needing a second rule.
-///
-/// The frame is the configuration hierarchy, so that every message naming a
-/// configuration names it the same way. Nothing about a repository enters it:
-/// which configuration is in effect is settled by the files themselves.
-///
-/// Forward slashes on every platform: paths are written that way in
-/// `vump.toml`, so one reported back with a platform separator would not match
-/// what the reader is looking at.
-#[must_use]
-pub fn describe_config(fs: &dyn FileSystem, root: &Path) -> String {
-    let file = root.join(crate::config::FILE_NAME);
-    let outer = outer_config(fs, root);
-    let base = outer.as_deref().and_then(Path::parent).unwrap_or(root);
-
-    file.strip_prefix(base)
-        .unwrap_or(&file)
-        .components()
-        .map(|part| part.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
 /// A version file and the version currently recorded in it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileVersion {

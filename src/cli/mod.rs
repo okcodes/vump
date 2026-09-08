@@ -795,11 +795,7 @@ fn status(ctx: &Context) -> Result<Exit, CliError> {
     };
 
     let statuses = app::status::status(&ctx.fs, &ctx.root, target)?;
-    render::status(
-        &statuses,
-        &app::describe_config(&ctx.fs, &ctx.root),
-        ctx.json,
-    );
+    render::status(&statuses, ctx.json);
 
     Ok(
         if statuses.iter().all(app::status::ProjectStatus::is_in_sync) {

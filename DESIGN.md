@@ -211,20 +211,13 @@ per-directory config files cannot express "bump the project called `api`"
 without first knowing where `api` lives.
 
 `vump status` with no project selected reports every declared project and
-whether its files agree, and names the configuration that answered.
+whether its files agree.
 
-Naming it matters because discovery searches upward: the file is not always in
-the directory the caller is standing in, and a report that omits it looks the
-same from everywhere.
-
-**A configuration is named relative to the configuration above it**, which is
-the same frame the nesting refusal uses — one file described one way, whatever
-message describes it. So `sandbox/npm/single-project/vump.toml` says where it
-is, and `vump.toml` says it is the repository's own. Relative to the working
-directory both would read `vump.toml`, which is the ambiguity being removed;
-relative to the repository root would need git for a question that has nothing
-to do with git, and would part company with the refusal's frame the moment a
-repository's outermost configuration was not at its root.
+**No command reports which `vump.toml` answered it.** With one configuration —
+the only supported layout — there is nothing to report: the file is wherever
+the upward search found it, and there was never a second candidate. With more
+than one, the layout itself is the problem, and that is what the nesting
+refusal names.
 
 #### One configuration per repository
 
@@ -256,8 +249,11 @@ neither can be mistaken for a release of vump.
 Treat "how do I make per-directory configurations work" as a question with a
 different answer: one `vump.toml`, several `[[project]]` entries.
 
-**Acting on a nested configuration is refused**, naming it and pointing at
-`[[project]]`. Nesting is decided by continuing the discovery walk past the
+**Acting on a nested configuration is refused**, naming both files and pointing
+at `[[project]]`. Both are named in full: a path relative to the other starts
+partway down the tree whenever a third configuration is involved, and reads as
+if it started at the top. An absolute path needs no frame, so there is no frame
+for a reader to guess at. Nesting is decided by continuing the discovery walk past the
 configuration it stopped at: if another `vump.toml` lies above, the one in
 effect is shadowing it. That is the same walk, asked one directory higher, so
 the check can never disagree with the resolution it is checking — and it needs
@@ -453,7 +449,7 @@ vump self list            List published releases
 | `--project <name>`  | all             | Select a project in a multi-project repository |
 | `--through <step>`  | bump commands   | How far to carry the release: `none`, `commit`, `tag`, `push` |
 | `--tag-style <style>` | bump commands | How the tag object is written                  |
-| `--allow-nested`    | global          | Permit git work from a nested configuration    |
+| `--allow-nested`    | global          | Act on a configuration nested below another    |
 | `--json`            | global          | Machine-readable output                        |
 
 Both replace the `[git]` setting of the same name for one run. There is no

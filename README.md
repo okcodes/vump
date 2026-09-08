@@ -48,7 +48,7 @@ needs, or it fails saying what is missing.
 | `vump release` | Drop the pre-release suffix |
 | `vump set <version>` | Write an exact version to every tracked file |
 | `vump check <version>` | Verify tracked files record this version |
-| `vump status` | Report recorded versions, whether they agree, and which `vump.toml` answered |
+| `vump status` | Report recorded versions and whether they agree |
 | `vump init` | Create a `vump.toml` |
 | `vump self update` | Install a published release |
 | `vump self status` | Running version, and whether a newer one exists |
@@ -62,7 +62,7 @@ needs, or it fails saying what is missing.
 | `--from <patch\|minor\|major>` | Which release a new pre-release leads to |
 | `--through <none\|commit\|tag\|push>` | How far to carry the release, overriding `vump.toml` |
 | `--tag-style <annotated\|lightweight\|signed>` | How the tag object is written, overriding `vump.toml` |
-| `--allow-nested` | Permit git work from a `vump.toml` nested inside another's repository |
+| `--allow-nested` | Act on a `vump.toml` nested below another anyway |
 | `--project <name>` | Select a project in a multi-project repository |
 | `--json` | Machine-readable output |
 | `--channel <c>` | `self` commands: least mature release to accept |

@@ -476,12 +476,14 @@ fn a_nested_configuration_may_not_be_written_from_without_acknowledgement() {
     assert_eq!(run.code, 3, "{}", run.output());
 
     // The message has to say where the caller actually is, or it reads as an
-    // obstacle to get past rather than as a wrong turn.
-    //
-    // The forward slash is deliberate and asserted on every platform: paths are
-    // written that way in vump.toml, so a message that reported one back with a
-    // Windows separator would not match what the reader is looking at.
-    assert!(run.stderr.contains("inner/vump.toml"), "{}", run.stderr);
+    // obstacle to get past rather than as a wrong turn. The separator is the
+    // platform's: this is a location on disk, not a path declared in vump.toml.
+    let tail = Path::new("inner").join("vump.toml");
+    assert!(
+        run.stderr.contains(&tail.display().to_string()),
+        "{}",
+        run.stderr
+    );
     assert!(run.stderr.contains("[[project]]"), "{}", run.stderr);
 
     // Refusing must leave everything as it was.
@@ -523,9 +525,15 @@ fn even_reading_a_nested_configuration_is_refused() {
     assert_eq!(fx.run_in("inner", &["status"]).code, 3);
     assert_eq!(fx.run_in("inner", &["check", "9.9.9"]).code, 3);
 
-    // The refusal is more informative than status was: it names both.
+    // Refusing is where a nested layout gets named, so the message carries the
+    // file that answered rather than leaving it to be worked out.
     let run = fx.run_in("inner", &["status"]);
-    assert!(run.stderr.contains("inner/vump.toml"), "{}", run.stderr);
+    let tail = Path::new("inner").join("vump.toml");
+    assert!(
+        run.stderr.contains(&tail.display().to_string()),
+        "{}",
+        run.stderr
+    );
 }
 
 #[test]
@@ -564,7 +572,12 @@ fn a_guided_run_refuses_before_asking_anything() {
 
     let run = fx.run_in("inner", &[]);
     assert_eq!(run.code, 3, "{}", run.output());
-    assert!(run.stderr.contains("inner/vump.toml"), "{}", run.stderr);
+    let tail = Path::new("inner").join("vump.toml");
+    assert!(
+        run.stderr.contains(&tail.display().to_string()),
+        "{}",
+        run.stderr
+    );
 }
 
 #[test]
@@ -1425,69 +1438,6 @@ fn init_finds_a_csproj_and_skips_one_with_no_version() {
 }
 
 #[test]
-fn status_names_the_configuration_that_answered() {
-    // Discovery searches upward, so the report has to say which configuration
-    // produced it. Without this, the same output came back wherever it was run
-    // from, which is what made an accidental bump inside sandbox/ invisible.
-    let fx = Fixture::new()
-        .write("vump.toml", SINGLE)
-        .write("VERSION", "1.2.3\n")
-        .with_git();
-
-    let run = fx.run(&["status"]);
-    assert_eq!(run.code, 0, "{}", run.output());
-    assert!(run.stdout.contains("vump.toml"), "{}", run.stdout);
-}
-
-#[test]
-fn status_distinguishes_a_nested_configuration_from_the_repositorys_own() {
-    // The whole point: these two must not read alike. Relative to the working
-    // directory both would be "vump.toml", so the repository is the frame.
-    let fx = Fixture::new()
-        .write("vump.toml", SINGLE)
-        .write("VERSION", "1.2.3\n")
-        .write("inner/vump.toml", SINGLE)
-        .write("inner/VERSION", "9.9.9\n")
-        .with_git();
-
-    let outer = fx.run(&["status"]);
-    let inner = fx.run_in("inner", &["status", "--allow-nested"]);
-
-    assert_eq!(outer.stdout.lines().next(), Some("vump.toml"));
-    assert_eq!(inner.stdout.lines().next(), Some("inner/vump.toml"));
-}
-
-#[test]
-fn status_reports_the_configuration_as_json_too() {
-    // Neither rendering may carry information the other lacks.
-    let fx = Fixture::new()
-        .write("vump.toml", SINGLE)
-        .write("VERSION", "1.2.3\n")
-        .write("inner/vump.toml", SINGLE)
-        .write("inner/VERSION", "9.9.9\n")
-        .with_git();
-
-    let value = fx
-        .run_in("inner", &["status", "--json", "--allow-nested"])
-        .json();
-    assert_eq!(value["config"], "inner/vump.toml");
-}
-
-#[test]
-fn status_outside_a_repository_still_names_the_configuration() {
-    // Reading versions never needed git, and naming the configuration does not
-    // either: the frame is the configuration above this one, and with none
-    // there is nothing to be relative to.
-    let fx = Fixture::new()
-        .write("vump.toml", SINGLE)
-        .write("VERSION", "1.2.3\n");
-
-    let run = fx.run(&["status"]);
-    assert_eq!(run.code, 0, "{}", run.output());
-    assert_eq!(run.stdout.lines().next(), Some("vump.toml"));
-}
-
-#[test]
 fn a_project_with_no_name_is_not_called_a_repository() {
     // A configuration describes projects, and a repository may hold several
     // configurations describing different things — so naming the one in effect
@@ -1529,26 +1479,48 @@ fn projects_are_separated_only_where_files_are_listed() {
 }
 
 #[test]
-fn a_configuration_and_the_refusal_name_it_the_same_way() {
-    // Two messages describing one file must not spell it differently. They
-    // once did: the refusal was relative to the outer configuration and status
-    // to the repository root, which agree until they do not.
+fn a_refusal_names_both_configurations_in_full() {
+    // Below two configurations, a path relative to the nearer one starts
+    // partway down the tree and reads as if it started at the top. Naming both
+    // files outright needs no frame, so there is no frame to read wrongly.
     let fx = Fixture::new()
         .write("vump.toml", SINGLE)
         .write("VERSION", "1.2.3\n")
-        .write("inner/vump.toml", SINGLE)
-        .write("inner/VERSION", "9.9.9\n")
-        .with_git();
+        .write("mid/vump.toml", SINGLE)
+        .write("mid/VERSION", "4.5.6\n")
+        .write("mid/deep/inner/vump.toml", SINGLE)
+        .write("mid/deep/inner/VERSION", "9.9.9\n");
 
-    let named = fx.run_in("inner", &["status", "--allow-nested"]);
-    let refused = fx.run_in("inner", &["status"]);
+    let run = fx.run_in("mid/deep/inner", &["status"]);
+    assert_eq!(run.code, 3, "{}", run.output());
 
-    let path = named.stdout.lines().next().expect("status names it");
-    assert_eq!(path, "inner/vump.toml");
+    let (inner, rest) = run
+        .stderr
+        .strip_prefix("error: ")
+        .and_then(|rest| rest.split_once(" sits below "))
+        .expect("the refusal names the configuration in effect");
+    let outer = rest
+        .split_once(", so this acts")
+        .expect("the refusal names the one it shadows")
+        .0;
+
+    // Absolute, so neither path is read against a directory the reader has to
+    // guess at.
+    assert!(Path::new(inner).is_absolute(), "{inner}");
+    assert!(Path::new(outer).is_absolute(), "{outer}");
+
+    let inner_tail = Path::new("mid")
+        .join("deep")
+        .join("inner")
+        .join("vump.toml");
+    let outer_tail = Path::new("mid").join("vump.toml");
     assert!(
-        refused.stderr.starts_with(&format!("error: {path} ")),
-        "{}",
-        refused.stderr
+        inner.ends_with(&inner_tail.display().to_string()),
+        "{inner}"
+    );
+    assert!(
+        outer.ends_with(&outer_tail.display().to_string()),
+        "{outer}"
     );
 }
 
