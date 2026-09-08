@@ -512,16 +512,47 @@ fn a_nested_dry_run_is_refused_rather_than_reporting_a_plan() {
 }
 
 #[test]
-fn reading_a_nested_configuration_is_never_refused() {
-    // status and check change nothing, and are exactly what someone who has
-    // lost track of which directory they are in needs to be able to run.
+fn even_reading_a_nested_configuration_is_refused() {
+    // Writing is not the hazard; using the wrong configuration at all is.
+    // `check` is the sharpest case: it answers whether a version matches, and
+    // a nested project whose version happens to coincide would answer yes
+    // about the wrong project — a confident false pass from the one command
+    // whose whole job is catching a version that lies.
     let fx = nested();
 
-    assert_eq!(fx.run_in("inner", &["status"]).code, 0);
-    assert_eq!(fx.run_in("inner", &["check", "9.9.9"]).code, 0);
+    assert_eq!(fx.run_in("inner", &["status"]).code, 3);
+    assert_eq!(fx.run_in("inner", &["check", "9.9.9"]).code, 3);
 
-    // Still reading the nested project rather than the outer one.
-    assert_eq!(fx.run_in("inner", &["check", "1.2.3"]).code, 4);
+    // The refusal is more informative than status was: it names both.
+    let run = fx.run_in("inner", &["status"]);
+    assert!(run.stderr.contains("inner/vump.toml"), "{}", run.stderr);
+}
+
+#[test]
+fn init_refuses_to_create_a_nested_configuration() {
+    // The place it matters most: this is where the arrangement every other
+    // command has to refuse would come into being.
+    let fx = Fixture::new()
+        .write("vump.toml", "files = [\"VERSION\"]\n")
+        .write("VERSION", "1.2.3\n")
+        .write("inner/VERSION", "9.9.9\n")
+        .with_git();
+
+    let run = fx.run_in("inner", &["init"]);
+    assert_eq!(run.code, 3, "{}", run.output());
+    assert!(run.stderr.contains("[[project]]"), "{}", run.stderr);
+    assert!(
+        !fx.path().join("inner/vump.toml").exists(),
+        "refusing must not leave a configuration behind"
+    );
+}
+
+#[test]
+fn init_at_the_repository_root_is_unaffected() {
+    let fx = Fixture::new().write("VERSION", "1.2.3\n").with_git();
+
+    assert_eq!(fx.run(&["init"]).code, 0);
+    assert!(fx.path().join("vump.toml").exists());
 }
 
 #[test]
@@ -1410,7 +1441,7 @@ fn the_sandbox_projects_stay_usable() {
         "cs/multi-project",
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_vump"))
-            .arg("status")
+            .args(["status", "--allow-nested"])
             .current_dir(sandbox.join(project))
             .stdin(Stdio::null())
             .output()

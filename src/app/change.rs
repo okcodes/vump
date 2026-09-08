@@ -147,7 +147,7 @@ pub struct GitPlanning<'a> {
     pub tag_message: &'a str,
 }
 
-/// Whether a run may write from a configuration nested inside another's.
+/// Whether a run may act on a configuration nested inside another's.
 ///
 /// A closed pair rather than a bare boolean, so the intent is legible where it
 /// is passed rather than only where it is declared.
@@ -191,13 +191,16 @@ pub enum ChangeError {
         changed: Vec<String>,
     },
 
-    /// Git work was asked for from a configuration nested inside another's.
+    /// A configuration nested inside another's repository was acted on.
     ///
     /// Refused rather than warned: by the time a warning about a pushed tag is
-    /// printed, the tag is on the remote.
+    /// printed, the tag is on the remote, and a warning above a `check` verdict
+    /// does not stop the verdict being believed.
     #[error(
-        "{inner} sits inside a repository that {outer} describes, so a commit or tag \
-         made here would land in that repository rather than in this project.\n\n\
+        "{inner} sits inside a repository that {outer} describes, so this acts on the \
+         nested project rather than on the repository: a bump would commit and tag \
+         into the repository even so, and a check would answer about the wrong \
+         project.\n\n\
          A repository holding several projects that version separately declares them \
          as [[project]] entries in one {file}, which is what lets them be addressed \
          by name from anywhere. Giving each its own {file} gives that up.\n\n\
@@ -225,20 +228,22 @@ fn format_disagreement(found: &[(String, Version)]) -> String {
         .join("\n")
 }
 
-/// Refuses to write from a configuration nested inside another's repository.
+/// Refuses to act on a configuration nested inside another's repository.
 ///
-/// Every command that writes is covered, not only those reaching git. The
-/// nested layout is the mistake `[[project]]` exists to prevent, so the
-/// refusal is about the layout rather than about one of its consequences —
-/// warning on some writes and not others would read as arbitrary, and the
-/// files a bump writes sit in the outer repository's working tree either way.
+/// Every command touching a project is covered, reading included. The hazard
+/// is not writing but using the wrong configuration at all: `check` answers
+/// whether a version matches, and a nested project whose version happens to
+/// coincide answers yes about the wrong project — a confident false pass from
+/// the one command whose purpose is catching a version that lies. Refusing
+/// only some commands would also warn about one layout sometimes and not
+/// others, which reads as arbitrary and teaches nothing.
 ///
-/// Read-only commands are untouched. `status` and `check` change nothing, and
-/// they are what someone who has lost track of where they are standing needs
-/// to be able to run.
+/// `init` is covered for the opposite reason: it is where the arrangement
+/// every other command refuses would come into being.
 ///
-/// Called before anything is read, written, or asked, so that a refusal costs
-/// no work — including, in a guided run, before the first prompt.
+/// Called once, where configuration becomes known and before any command runs,
+/// so that a refusal costs no work and no later command can be written without
+/// it.
 ///
 /// # Errors
 ///

@@ -15,7 +15,7 @@ use std::path::Path;
 
 use semver::Version;
 
-use crate::app::change::{ChangeError, ChangeSet, GitPlanning, Nesting, check_nesting, compose};
+use crate::app::change::{ChangeError, ChangeSet, GitPlanning, compose};
 use crate::app::read_project_versions;
 use crate::config::Project;
 use crate::ports::FileSystem;
@@ -37,9 +37,7 @@ pub fn set(
     project: &Project,
     target: Version,
     planning: GitPlanning<'_>,
-    nesting: Nesting,
 ) -> Result<ChangeSet, ChangeError> {
-    check_nesting(fs, root, nesting)?;
     let files = read_project_versions(fs, root, project)?;
     Ok(compose(project, target, files, planning))
 }
@@ -86,7 +84,6 @@ mod tests {
                 tag_style: TagStyle::default(),
                 tag_message: DEFAULT_TAG_MESSAGE,
             },
-            Nesting::Refuse,
         )
         .unwrap()
     }

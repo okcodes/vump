@@ -262,18 +262,24 @@ not a preference with a default worth overriding, but an acknowledgement of a
 hazard already detected — the same shape as `vump init --force`, which is also a
 flag and would gain nothing from being spelled in a file.
 
-**The line is reading against writing, not git against no-git.** Every command
-that writes is refused, including one carrying `through = "none"`, and including
-`--dry-run`, whose contract is to report what a real run would do — a plan for a
-run that would be refused is not that.
+**Every command touching a project is refused, reading included.** The hazard
+is not writing but operating on the wrong configuration at all, and `check` is
+the sharpest case rather than an exception to it: it answers whether a version
+matches, so a nested project whose version happens to coincide answers *yes*
+about the wrong project — a confident false pass, from the one command whose
+whole purpose is catching a version that lies. A refused write is a mistake
+someone notices; a wrong verdict is one they believe.
 
-Refusing only the runs that reach git would have warned about the same layout
-sometimes and not others, which reads as arbitrary and teaches nothing. The
-refusal is about the layout rather than about one of its consequences, and the
-files a bump writes sit in the outer repository's working tree either way.
+`init` is refused for the opposite reason: writing a configuration beneath one
+that already exists is where the arrangement every other command refuses comes
+into being.
 
-`status` and `check` change nothing and are never refused. Someone who has lost
-track of which directory they are standing in needs to be able to ask.
+Only `self` commands are exempt, and only because they act on the installed
+binary and never load a configuration at all.
+
+That leaves one rule with no carve-outs to remember, and one gate: the check
+runs where configuration becomes known, before any command is dispatched, so a
+command added later cannot be written without it.
 
 ### Tag patterns
 

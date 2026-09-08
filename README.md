@@ -141,9 +141,11 @@ repository, so a nested configuration commits and tags into a repository it
 does not describe.
 
 vump refuses that rather than warning about it — a warning arrives too late to
-help once a tag is pushed — so **writing** from a nested `vump.toml` stops and
-points at `[[project]]`. Reading is free: `status` and `check` change nothing
-and always work, which is what you want when you are unsure where you are.
+help once a tag is pushed — so **any** command run against a nested `vump.toml`
+stops and points at `[[project]]`. Reading is refused too, and `check` is the
+reason: it reports whether a version matches, so run against the wrong project
+it can answer *yes* about something you never meant to verify. `init` is
+refused as well, since that is where a second `vump.toml` would come from.
 
 `--allow-nested` proceeds anyway, and having to type it every time is intended:
 it means a feature that would remove the need is going unused.

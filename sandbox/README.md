@@ -23,15 +23,16 @@ commit or tag made here lands in **this** repository, so every `vump.toml` in
 the sandbox sets `through = "none"`.
 
 Two further layers stand behind that setting, because it can be overridden by
-a flag. vump refuses to **write** from a configuration nested inside another's
-repository unless `--allow-nested` is passed — which is why every bump below
-carries it. Reading is free: `status` and `check` need nothing. And each
+a flag. vump refuses to **act on** a configuration nested inside another's
+repository unless `--allow-nested` is passed — which is why every command below
+carries it, `status` included: reading the wrong project is a hazard of its own,
+since a check can answer about one you never meant to verify. And each
 project names its own tag and commit so that one made in spite of all that
 still cannot be mistaken for vump's: `sandbox-npm-v1.2.3` rather than
 `v1.2.3`. The release workflow triggers on tags matching `v*`, and nothing
 from here may match it.
 
-Typing `--allow-nested` on every bump here is the intended cost. These projects
+Typing `--allow-nested` on every command here is the intended cost. These projects
 are the one place the nested layout is kept deliberately, and the flag is a
 standing reminder that anywhere else the answer is `[[project]]`.
 
@@ -55,7 +56,7 @@ sandbox-prefixed tag.
 
 ```bash
 cd sandbox/npm/single-project
-vump status                            # what is recorded now
+vump status --allow-nested             # what is recorded now
 vump minor --dry-run --allow-nested    # what a bump would rewrite
 vump minor --allow-nested              # rewrite it
 node index.js               # the new version, from the manifest
@@ -66,9 +67,9 @@ identifies its own project:
 
 ```bash
 cd sandbox/npm/multi-project
-vump status                               # every project at a glance
+vump status --allow-nested                # every project at a glance
 vump patch --project project-a --allow-nested
-vump check sandbox-npm-project-a-v1.0.1   # the tag says which project to verify
+vump check sandbox-npm-project-a-v1.0.1 --allow-nested
 ```
 
 For C#, the version reaches the assembly:

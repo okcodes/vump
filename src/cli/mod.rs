@@ -50,10 +50,11 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "NAME")]
     project: Option<String>,
 
-    /// Permit git work from a vump.toml nested inside another's repository.
+    /// Act on a vump.toml nested inside another's repository.
     ///
-    /// Global rather than a bump flag because a guided run takes none of
-    /// those, and would otherwise have no way to proceed at all.
+    /// Global because every command touching a project is refused from one,
+    /// reading included: the hazard is using the wrong configuration, not
+    /// writing through it.
     #[arg(long, global = true)]
     allow_nested: bool,
 }
@@ -353,17 +354,26 @@ struct Context {
     config: Config,
     json: bool,
     project: Option<String>,
-    nesting: Nesting,
 }
 
 fn execute(cli: &Cli) -> Result<Exit, CliError> {
     let cwd = std::env::current_dir().map_err(|e| CliError::WorkingDirectory(e.to_string()))?;
+
+    let nesting = if cli.allow_nested {
+        Nesting::Allowed
+    } else {
+        Nesting::Refuse
+    };
 
     // init and update operate on the installation rather than on a project, so
     // they run before configuration is looked for. init exists precisely
     // because there is none yet.
     match &cli.command {
         Some(Command::Init { force }) => {
+            // Refused here too, and this is the place it matters most: writing
+            // a configuration under one that already exists is what creates
+            // the arrangement every other command then has to refuse.
+            app::change::check_nesting(&RealFileSystem, &cwd, nesting)?;
             let written = app::init::init(&RealFileSystem, &cwd, *force)?;
             render::init(&written, cli.json);
             return Ok(Exit::Success);
@@ -374,17 +384,17 @@ fn execute(cli: &Cli) -> Result<Exit, CliError> {
 
     let (root, config) = Config::discover(&cwd)?;
 
+    // Every command acting on a project is covered, before any of them runs.
+    // One gate at the point configuration becomes known, rather than a check
+    // per use case that a later command could be written without.
+    app::change::check_nesting(&RealFileSystem, &root, nesting)?;
+
     let ctx = Context {
         fs: RealFileSystem,
         root,
         config,
         json: cli.json,
         project: cli.project.clone(),
-        nesting: if cli.allow_nested {
-            Nesting::Allowed
-        } else {
-            Nesting::Refuse
-        },
     };
 
     let pre = |label, args: &PreReleaseArgs| Transition::PreRelease {
@@ -501,12 +511,6 @@ fn self_command(command: &SelfCommand, json: bool) -> Result<Exit, CliError> {
 fn interactive(ctx: &Context) -> Result<Exit, CliError> {
     let ask = TerminalInteraction::new();
 
-    // Before the first question rather than with the rest of planning, which
-    // happens once every answer is in. Making someone choose a bump and then
-    // telling them the run was never going to be allowed wastes the only thing
-    // a guided run is spending: their attention.
-    app::change::check_nesting(&ctx.fs, &ctx.root, ctx.nesting)?;
-
     // Which project.
     let project = match ctx.project.as_deref() {
         Some(name) => ctx.config.select(Some(name))?.clone(),
@@ -558,7 +562,6 @@ fn interactive(ctx: &Context) -> Result<Exit, CliError> {
             tag_style: ctx.config.git.tag_style,
             tag_message: &ctx.config.git.tag_message,
         },
-        ctx.nesting,
     )?;
 
     if !ask.confirm(&render::summary(&plan))? {
@@ -653,7 +656,6 @@ fn bump(
             tag_style: git_args.tag_style(&ctx.config.git),
             tag_message: &ctx.config.git.tag_message,
         },
-        ctx.nesting,
     )?;
 
     if dry_run {
@@ -702,7 +704,6 @@ fn set(ctx: &Context, version: &str, dry_run: bool, git_args: &GitArgs) -> Resul
             tag_style: git_args.tag_style(&ctx.config.git),
             tag_message: &ctx.config.git.tag_message,
         },
-        ctx.nesting,
     )?;
 
     if dry_run {
