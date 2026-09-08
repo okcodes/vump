@@ -101,7 +101,7 @@ pub fn check(report: &CheckReport, json: bool) {
 }
 
 /// Renders the outcome of a `status`.
-pub fn status(projects: &[ProjectStatus], json: bool) {
+pub fn status(projects: &[ProjectStatus], config: &str, json: bool) {
     if json {
         let rendered: Vec<Value> = projects
             .iter()
@@ -121,12 +121,19 @@ pub fn status(projects: &[ProjectStatus], json: bool) {
         print(&json!({
             "command": "status",
             "ok": projects.iter().all(ProjectStatus::is_in_sync),
+            "config": config,
             "projects": rendered,
         }));
         return;
     }
 
     let marks = Marks::detect();
+
+    // Which configuration answered. Reported before the versions because it is
+    // what decides whether they are the versions being asked about: discovery
+    // searches upward, so the file is not always in the directory the caller is
+    // standing in, and a report that omits it looks the same from anywhere.
+    println!("{config}");
 
     for (i, project) in projects.iter().enumerate() {
         if i > 0 {

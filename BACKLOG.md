@@ -103,23 +103,6 @@ consumers are known to have `gh` available.
 every time. Persisting it needs installation-level state — a config directory
 vump otherwise has no need for — which one setting does not obviously justify.
 
-### Reporting which configuration is in effect
-
-`vump status` prints versions and whether they agree, but never says which
-`vump.toml` produced them. Configuration is discovered by searching upward, so
-the answer is not always the directory the caller is standing in, and the
-output of a single-project repository — `OK (this repository) 1.0.0` — looks
-identical wherever it was run from.
-
-The motivating case is the accidental bump inside `sandbox/`: `status` was the
-cheap way to notice the mistake first, except that what it printed gave no
-indication of where it was reading from. Advising people to run it beforehand
-is worth little while it withholds the one fact that would settle the question.
-
-Undecided only in how much to print — the path alone, relative to the working
-directory, is probably enough, and belongs in `status` rather than on every
-command.
-
 ### Inputs on the check action
 
 The composite action takes `version`, `config` and `vump-version`. Passing a

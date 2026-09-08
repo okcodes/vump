@@ -46,6 +46,37 @@ pub fn outer_config(fs: &dyn FileSystem, root: &Path) -> Option<PathBuf> {
     }
 }
 
+/// The repository `from` sits in, if any.
+///
+/// Found by the directory holding `.git`, the same way configuration is found
+/// by the directory holding `vump.toml`. Returns `None` outside a repository,
+/// which is legitimate: reading and comparing versions needs no git.
+#[must_use]
+pub fn repository_root(fs: &dyn FileSystem, from: &Path) -> Option<PathBuf> {
+    let mut dir = from;
+    loop {
+        if holds_git(fs, dir) {
+            return Some(dir.to_path_buf());
+        }
+        dir = dir.parent()?;
+    }
+}
+
+/// `path` written relative to `base`, with forward slashes on every platform.
+///
+/// Paths are written with forward slashes in `vump.toml`, so one reported back
+/// with a platform separator would not match what the reader is looking at.
+/// Falls back to the path itself when it does not sit under `base`.
+#[must_use]
+pub fn relative_display(path: &Path, base: &Path) -> String {
+    path.strip_prefix(base)
+        .unwrap_or(path)
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// Whether a directory is a repository root.
 ///
 /// `.git` is a directory in an ordinary checkout and a file in a worktree or

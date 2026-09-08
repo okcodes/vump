@@ -779,6 +779,24 @@ fn check(ctx: &Context, version: &str) -> Result<Exit, CliError> {
     })
 }
 
+/// The configuration's path, written relative to the repository holding it.
+///
+/// The repository is the frame, not the working directory: a configuration in
+/// the directory the caller is standing in and one at the repository root would
+/// both be written `vump.toml`, which is the ambiguity this exists to remove.
+/// `sandbox/npm/single-project/vump.toml` says where it is; `vump.toml` says it
+/// is the repository's own.
+///
+/// Outside a repository there is no frame to be relative to, so the full path
+/// is shown instead.
+fn config_in_effect(ctx: &Context) -> String {
+    let file = ctx.root.join(crate::config::FILE_NAME);
+    match app::repository_root(&ctx.fs, &ctx.root) {
+        Some(repository) => app::relative_display(&file, &repository),
+        None => file.display().to_string(),
+    }
+}
+
 fn status(ctx: &Context) -> Result<Exit, CliError> {
     // Selecting a project narrows the report; without one, every declared
     // project is reported.
@@ -795,7 +813,7 @@ fn status(ctx: &Context) -> Result<Exit, CliError> {
     };
 
     let statuses = app::status::status(&ctx.fs, &ctx.root, target)?;
-    render::status(&statuses, ctx.json);
+    render::status(&statuses, &config_in_effect(ctx), ctx.json);
 
     Ok(
         if statuses.iter().all(app::status::ProjectStatus::is_in_sync) {

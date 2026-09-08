@@ -1424,6 +1424,76 @@ fn init_finds_a_csproj_and_skips_one_with_no_version() {
     assert!(!config.contains("Tools.csproj"), "{config}");
 }
 
+#[test]
+fn status_names_the_configuration_that_answered() {
+    // Discovery searches upward, so the report has to say which configuration
+    // produced it. Without this, the same output came back wherever it was run
+    // from, which is what made an accidental bump inside sandbox/ invisible.
+    let fx = Fixture::new()
+        .write("vump.toml", SINGLE)
+        .write("VERSION", "1.2.3\n")
+        .with_git();
+
+    let run = fx.run(&["status"]);
+    assert_eq!(run.code, 0, "{}", run.output());
+    assert!(run.stdout.contains("vump.toml"), "{}", run.stdout);
+}
+
+#[test]
+fn status_distinguishes_a_nested_configuration_from_the_repositorys_own() {
+    // The whole point: these two must not read alike. Relative to the working
+    // directory both would be "vump.toml", so the repository is the frame.
+    let fx = Fixture::new()
+        .write("vump.toml", SINGLE)
+        .write("VERSION", "1.2.3\n")
+        .write("inner/vump.toml", SINGLE)
+        .write("inner/VERSION", "9.9.9\n")
+        .with_git();
+
+    let outer = fx.run(&["status"]);
+    let inner = fx.run_in("inner", &["status", "--allow-nested"]);
+
+    assert_eq!(outer.stdout.lines().next(), Some("vump.toml"));
+    assert_eq!(inner.stdout.lines().next(), Some("inner/vump.toml"));
+}
+
+#[test]
+fn status_reports_the_configuration_as_json_too() {
+    // Neither rendering may carry information the other lacks.
+    let fx = Fixture::new()
+        .write("vump.toml", SINGLE)
+        .write("VERSION", "1.2.3\n")
+        .write("inner/vump.toml", SINGLE)
+        .write("inner/VERSION", "9.9.9\n")
+        .with_git();
+
+    let value = fx
+        .run_in("inner", &["status", "--json", "--allow-nested"])
+        .json();
+    assert_eq!(value["config"], "inner/vump.toml");
+}
+
+#[test]
+fn status_outside_a_repository_still_names_the_configuration() {
+    // There is no repository to be relative to, and reading versions never
+    // needed one, so the full path stands in rather than the report going
+    // silent.
+    let fx = Fixture::new()
+        .write("vump.toml", SINGLE)
+        .write("VERSION", "1.2.3\n");
+
+    let run = fx.run(&["status"]);
+    assert_eq!(run.code, 0, "{}", run.output());
+    assert!(
+        run.stdout
+            .lines()
+            .next()
+            .is_some_and(|l| l.ends_with("vump.toml")),
+        "{}",
+        run.stdout
+    );
+}
+
 // ─── Sandbox ─────────────────────────────────────────────────────────────────
 
 #[test]
