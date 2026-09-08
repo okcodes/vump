@@ -46,31 +46,29 @@ pub fn outer_config(fs: &dyn FileSystem, root: &Path) -> Option<PathBuf> {
     }
 }
 
-/// The repository `from` sits in, if any.
+/// How a configuration's path is written when it has to be named.
 ///
-/// Found by the directory holding `.git`, the same way configuration is found
-/// by the directory holding `vump.toml`. Returns `None` outside a repository,
-/// which is legitimate: reading and comparing versions needs no git.
+/// Relative to the configuration above it when there is one, so that a nested
+/// file reads as `sandbox/npm/single-project/vump.toml` while a repository's
+/// own reads as `vump.toml`. With nothing above it, its own directory gives
+/// that second answer without needing a second rule.
+///
+/// The frame is the configuration hierarchy rather than the repository, so that
+/// every message naming a configuration names it the same way. Git bounds the
+/// *search* — beyond a repository root a configuration describes something else
+/// — but it is not what a path is written relative to.
+///
+/// Forward slashes on every platform: paths are written that way in
+/// `vump.toml`, so one reported back with a platform separator would not match
+/// what the reader is looking at.
 #[must_use]
-pub fn repository_root(fs: &dyn FileSystem, from: &Path) -> Option<PathBuf> {
-    let mut dir = from;
-    loop {
-        if holds_git(fs, dir) {
-            return Some(dir.to_path_buf());
-        }
-        dir = dir.parent()?;
-    }
-}
+pub fn describe_config(fs: &dyn FileSystem, root: &Path) -> String {
+    let file = root.join(crate::config::FILE_NAME);
+    let outer = outer_config(fs, root);
+    let base = outer.as_deref().and_then(Path::parent).unwrap_or(root);
 
-/// `path` written relative to `base`, with forward slashes on every platform.
-///
-/// Paths are written with forward slashes in `vump.toml`, so one reported back
-/// with a platform separator would not match what the reader is looking at.
-/// Falls back to the path itself when it does not sit under `base`.
-#[must_use]
-pub fn relative_display(path: &Path, base: &Path) -> String {
-    path.strip_prefix(base)
-        .unwrap_or(path)
+    file.strip_prefix(base)
+        .unwrap_or(&file)
         .components()
         .map(|part| part.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()

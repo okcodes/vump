@@ -1475,23 +1475,59 @@ fn status_reports_the_configuration_as_json_too() {
 
 #[test]
 fn status_outside_a_repository_still_names_the_configuration() {
-    // There is no repository to be relative to, and reading versions never
-    // needed one, so the full path stands in rather than the report going
-    // silent.
+    // Reading versions never needed git, and naming the configuration does not
+    // either: the frame is the configuration above this one, and with none
+    // there is nothing to be relative to.
     let fx = Fixture::new()
         .write("vump.toml", SINGLE)
         .write("VERSION", "1.2.3\n");
 
     let run = fx.run(&["status"]);
     assert_eq!(run.code, 0, "{}", run.output());
+    assert_eq!(run.stdout.lines().next(), Some("vump.toml"));
+}
+
+#[test]
+fn a_configuration_and_the_refusal_name_it_the_same_way() {
+    // Two messages describing one file must not spell it differently. They
+    // once did: the refusal was relative to the outer configuration and status
+    // to the repository root, which agree until they do not.
+    let fx = Fixture::new()
+        .write("vump.toml", SINGLE)
+        .write("VERSION", "1.2.3\n")
+        .write("inner/vump.toml", SINGLE)
+        .write("inner/VERSION", "9.9.9\n")
+        .with_git();
+
+    let named = fx.run_in("inner", &["status", "--allow-nested"]);
+    let refused = fx.run_in("inner", &["status"]);
+
+    let path = named.stdout.lines().next().expect("status names it");
+    assert_eq!(path, "inner/vump.toml");
     assert!(
-        run.stdout
-            .lines()
-            .next()
-            .is_some_and(|l| l.ends_with("vump.toml")),
+        refused.stderr.starts_with(&format!("error: {path} ")),
         "{}",
-        run.stdout
+        refused.stderr
     );
+}
+
+#[test]
+fn a_nested_repository_of_its_own_is_not_nested() {
+    // A directory with its own .git is a repository, so a commit there lands
+    // in it rather than in the enclosing one — there is nothing to refuse.
+    // This is why the search for an outer configuration stops at a repository
+    // root rather than walking to the filesystem's.
+    let fx = Fixture::new()
+        .write("vump.toml", SINGLE)
+        .write("VERSION", "1.2.3\n")
+        .write("inner/vump.toml", SINGLE)
+        .write("inner/VERSION", "9.9.9\n")
+        .with_git();
+
+    assert_eq!(fx.run_in("inner", &["status"]).code, 3);
+
+    fx.git_in("inner", &["init", "-q", "."]);
+    assert_eq!(fx.run_in("inner", &["status"]).code, 0);
 }
 
 // ─── Sandbox ─────────────────────────────────────────────────────────────────

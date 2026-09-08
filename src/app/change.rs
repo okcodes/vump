@@ -197,9 +197,9 @@ pub enum ChangeError {
     /// printed, the tag is on the remote, and a warning above a `check` verdict
     /// does not stop the verdict being believed.
     #[error(
-        "{inner} sits inside a repository that {outer} describes, so this acts on the \
-         nested project rather than on the repository: a bump would commit and tag \
-         into the repository even so, and a check would answer about the wrong \
+        "{inner} sits inside a repository that another {file} describes, so this acts \
+         on the nested project rather than on the repository: a bump would commit and \
+         tag into the repository even so, and a check would answer about the wrong \
          project.\n\n\
          A repository holding several projects that version separately declares them \
          as [[project]] entries in one {file}, which is what lets them be addressed \
@@ -208,10 +208,8 @@ pub enum ChangeError {
         file = crate::config::FILE_NAME
     )]
     NestedConfig {
-        /// The configuration in effect, relative to the outer one.
+        /// The configuration in effect, named as every message names one.
         inner: String,
-        /// The configuration describing the repository.
-        outer: String,
     },
 
     /// A git operation failed.
@@ -257,18 +255,12 @@ pub fn check_nesting(
     if nesting == Nesting::Allowed {
         return Ok(());
     }
-    let Some(outer) = crate::app::outer_config(fs, root) else {
+    if crate::app::outer_config(fs, root).is_none() {
         return Ok(());
-    };
-
-    // Shown relative to the repository being acted on, which is the frame the
-    // reader needs in order to see where they actually are.
-    let base = outer.parent().unwrap_or(&outer);
-    let inner = root.join(crate::config::FILE_NAME);
+    }
 
     Err(ChangeError::NestedConfig {
-        inner: crate::app::relative_display(&inner, base),
-        outer: crate::app::relative_display(&outer, base),
+        inner: crate::app::describe_config(fs, root),
     })
 }
 

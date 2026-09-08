@@ -214,12 +214,16 @@ whether its files agree, and names the configuration that answered.
 
 Naming it matters because discovery searches upward: the file is not always in
 the directory the caller is standing in, and a report that omits it looks the
-same from everywhere. The path is written relative to the repository rather
-than to the working directory, since both a configuration in the current
-directory and the repository's own would otherwise be written `vump.toml` —
-`sandbox/npm/single-project/vump.toml` says where it is, `vump.toml` says it is
-the repository's own. Outside a repository there is no frame to be relative to,
-so the full path stands in.
+same from everywhere.
+
+**A configuration is named relative to the configuration above it**, which is
+the same frame the nesting refusal uses — one file described one way, whatever
+message describes it. So `sandbox/npm/single-project/vump.toml` says where it
+is, and `vump.toml` says it is the repository's own. Relative to the working
+directory both would read `vump.toml`, which is the ambiguity being removed;
+relative to the repository root would need git for a question that has nothing
+to do with git, and would part company with the refusal's frame the moment a
+repository's outermost configuration was not at its root.
 
 #### One configuration per repository
 
