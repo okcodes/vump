@@ -47,6 +47,30 @@ vump versions itself with vump.
 vump patch --through push        # or: alpha, beta, rc, release
 ```
 
+### Choosing the number, while the major is 0
+
+**Until 1.0, the minor is the breaking slot.** This is not a formality: Cargo
+and npm both resolve `0.3.1` as compatible with `0.3.0` and refuse `0.4.0`, so
+the number is the only signal anyone pinning a version receives.
+
+| Bump | For |
+| --- | --- |
+| Minor (`0.3.0` → `0.4.0`) | Anything that breaks a working setup: a configuration key renamed or removed, a flag removed, or an invocation that used to succeed and now fails |
+| Patch (`0.3.0` → `0.3.1`) | Everything else |
+
+The test is whether an existing setup stops working — **not** whether the old
+behavior deserved to keep working. A refusal added for good reasons still
+breaks whoever relied on the thing now refused, and shipping that as a patch
+tells every resolver that nothing changed. vump exists to stop a version number
+from lying about its source; its own numbers are held to that.
+
+Reaching 1.0 is what changes this: the major becomes the breaking slot and the
+minor goes back to meaning additive.
+
+A change with nothing in it for someone running the binary — documentation, a
+test, repository configuration — needs no release of its own and rides along
+with the next one that does.
+
 Pushing the tag runs the release workflow, in this order:
 
 1. **Verify** — the tag is checked against the version in source before
