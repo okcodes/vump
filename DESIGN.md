@@ -262,9 +262,18 @@ not a preference with a default worth overriding, but an acknowledgement of a
 hazard already detected — the same shape as `vump init --force`, which is also a
 flag and would gain nothing from being spelled in a file.
 
-The refusal applies only when the run would reach a commit. `through = "none"`
-writes files and touches nothing else, which is exactly what a nested project is
-usable for.
+**The line is reading against writing, not git against no-git.** Every command
+that writes is refused, including one carrying `through = "none"`, and including
+`--dry-run`, whose contract is to report what a real run would do — a plan for a
+run that would be refused is not that.
+
+Refusing only the runs that reach git would have warned about the same layout
+sometimes and not others, which reads as arbitrary and teaches nothing. The
+refusal is about the layout rather than about one of its consequences, and the
+files a bump writes sit in the outer repository's working tree either way.
+
+`status` and `check` change nothing and are never refused. Someone who has lost
+track of which directory they are standing in needs to be able to ask.
 
 ### Tag patterns
 

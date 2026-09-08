@@ -141,11 +141,12 @@ repository, so a nested configuration commits and tags into a repository it
 does not describe.
 
 vump refuses that rather than warning about it — a warning arrives too late to
-help once a tag is pushed — so a bump from a nested `vump.toml` stops and points
-at `[[project]]`. Writing files still works, since only the commit and tag
-escape into the outer repository. `--allow-nested` proceeds anyway, and having
-to type it every time is intended: it means a feature that would remove the
-need is going unused.
+help once a tag is pushed — so **writing** from a nested `vump.toml` stops and
+points at `[[project]]`. Reading is free: `status` and `check` change nothing
+and always work, which is what you want when you are unsure where you are.
+
+`--allow-nested` proceeds anyway, and having to type it every time is intended:
+it means a feature that would remove the need is going unused.
 
 ### Tagging independently-versioned projects
 

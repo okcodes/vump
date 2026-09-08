@@ -137,12 +137,6 @@ pub struct Outcome {
 pub struct GitPlanning<'a> {
     /// How far to carry the release.
     pub through: GitThrough,
-    /// Whether git work is permitted from a configuration nested in another's
-    /// repository.
-    ///
-    /// Travels with the planning rather than being checked separately so that
-    /// no path reaching git can omit the question.
-    pub allow_nested: bool,
     /// Commit message template.
     pub commit_message: &'a str,
     /// Tag template for the project being changed.
@@ -151,6 +145,18 @@ pub struct GitPlanning<'a> {
     pub tag_style: TagStyle,
     /// Message template for an annotated or signed tag.
     pub tag_message: &'a str,
+}
+
+/// Whether a run may write from a configuration nested inside another's.
+///
+/// A closed pair rather than a bare boolean, so the intent is legible where it
+/// is passed rather than only where it is declared.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Nesting {
+    /// Refuse, naming the outer configuration and the way out.
+    Refuse,
+    /// Proceed: the caller passed `--allow-nested`.
+    Allowed,
 }
 
 /// Why a change could not be planned or applied.
@@ -219,30 +225,38 @@ fn format_disagreement(found: &[(String, Version)]) -> String {
         .join("\n")
 }
 
-/// Refuses git work from a configuration nested inside another's repository.
+/// Refuses to write from a configuration nested inside another's repository.
 ///
-/// Checked before anything is read or written, so a refusal leaves no partial
-/// state. A run that touches no git is allowed through: writing files inside a
-/// nested project is what the arrangement is for, and only the commit and tag
-/// escape into a repository the configuration does not describe.
+/// Every command that writes is covered, not only those reaching git. The
+/// nested layout is the mistake `[[project]]` exists to prevent, so the
+/// refusal is about the layout rather than about one of its consequences —
+/// warning on some writes and not others would read as arbitrary, and the
+/// files a bump writes sit in the outer repository's working tree either way.
+///
+/// Read-only commands are untouched. `status` and `check` change nothing, and
+/// they are what someone who has lost track of where they are standing needs
+/// to be able to run.
+///
+/// Called before anything is read, written, or asked, so that a refusal costs
+/// no work — including, in a guided run, before the first prompt.
 ///
 /// # Errors
 ///
-/// Returns [`ChangeError::NestedConfig`] when an outer configuration exists,
-/// the run would commit, and the caller has not acknowledged it.
+/// Returns [`ChangeError::NestedConfig`] when an outer configuration exists
+/// and the caller has not acknowledged it.
 pub fn check_nesting(
     fs: &dyn FileSystem,
     root: &Path,
-    planning: GitPlanning<'_>,
+    nesting: Nesting,
 ) -> Result<(), ChangeError> {
-    if planning.allow_nested || !planning.through.commits() {
+    if nesting == Nesting::Allowed {
         return Ok(());
     }
     let Some(outer) = crate::app::outer_config(fs, root) else {
         return Ok(());
     };
 
-    // Paths are shown relative to the repository the commit would land in,
+    // Paths are shown relative to the repository the write would land in,
     // which is the frame the reader needs to see where they actually are, and
     // with forward slashes on every platform to match how a path is written in
     // vump.toml and reported by every other message.
@@ -429,7 +443,6 @@ mod tests {
                 .collect(),
             GitPlanning {
                 through,
-                allow_nested: false,
                 commit_message: &settings.commit_message,
                 tag: &pattern,
                 tag_style: TagStyle::default(),
@@ -455,7 +468,6 @@ mod tests {
             }],
             GitPlanning {
                 through: GitThrough::Tag,
-                allow_nested: false,
                 commit_message: &settings.commit_message,
                 tag: &pattern,
                 tag_style: style,

@@ -23,12 +23,17 @@ commit or tag made here lands in **this** repository, so every `vump.toml` in
 the sandbox sets `through = "none"`.
 
 Two further layers stand behind that setting, because it can be overridden by
-a flag. vump refuses git work from a configuration nested inside another's
-repository unless `--allow-nested` is passed, so a bump here stops rather than
-committing. And each project names its own tag and commit so that one made in
-spite of all that still cannot be mistaken for vump's: `sandbox-npm-v1.2.3`
-rather than `v1.2.3`. The release workflow triggers on tags matching `v*`, and
-nothing from here may match it.
+a flag. vump refuses to **write** from a configuration nested inside another's
+repository unless `--allow-nested` is passed — which is why every bump below
+carries it. Reading is free: `status` and `check` need nothing. And each
+project names its own tag and commit so that one made in spite of all that
+still cannot be mistaken for vump's: `sandbox-npm-v1.2.3` rather than
+`v1.2.3`. The release workflow triggers on tags matching `v*`, and nothing
+from here may match it.
+
+Typing `--allow-nested` on every bump here is the intended cost. These projects
+are the one place the nested layout is kept deliberately, and the flag is a
+standing reminder that anywhere else the answer is `[[project]]`.
 
 That leaves nothing untested. Commits, tags and pushes are covered by the
 end-to-end suite, which creates a throwaway repository per test and asserts on
@@ -42,18 +47,17 @@ first and let the tags die with it:
 git clone . /tmp/vump-scratch && cd /tmp/vump-scratch/sandbox/npm/single-project
 ```
 
-Asking for git work here without that clone — `--through tag`, say — is
-refused, and the message says why. `--allow-nested` proceeds anyway, and then
-it is this repository's history that grows a commit and a sandbox-prefixed
-tag.
+Without that clone, `--allow-nested` is what lets a bump run at all, and adding
+`--through tag` to it grows this repository's history by a commit and a
+sandbox-prefixed tag.
 
 ## Trying it
 
 ```bash
 cd sandbox/npm/single-project
-vump status                 # what is recorded now
-vump minor --dry-run        # what a bump would rewrite
-vump minor                  # rewrite it
+vump status                            # what is recorded now
+vump minor --dry-run --allow-nested    # what a bump would rewrite
+vump minor --allow-nested              # rewrite it
 node index.js               # the new version, from the manifest
 ```
 
@@ -62,8 +66,8 @@ identifies its own project:
 
 ```bash
 cd sandbox/npm/multi-project
-vump status                          # every project at a glance
-vump patch --project project-a
+vump status                               # every project at a glance
+vump patch --project project-a --allow-nested
 vump check sandbox-npm-project-a-v1.0.1   # the tag says which project to verify
 ```
 
@@ -71,7 +75,7 @@ For C#, the version reaches the assembly:
 
 ```bash
 cd sandbox/cs/single-project
-vump alpha --from minor
+vump alpha --from minor --allow-nested
 dotnet run --project Demo            # Demo 1.1.0-alpha.0
 ```
 

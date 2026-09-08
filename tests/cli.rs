@@ -454,18 +454,23 @@ fn a_repository_that_declares_no_git_work_gets_none() {
     assert!(fx.tags().is_empty());
 }
 
-#[test]
-fn a_nested_configuration_may_not_commit_without_acknowledgement() {
-    // The accident this exists for: `vump patch --through push` run inside
-    // sandbox/npm/single-project tagged vump's own repository. Discovery stops
-    // at the nearest vump.toml, but git still operates on the enclosing
-    // repository, which the outer one describes.
-    let fx = Fixture::new()
+/// A repository whose own configuration is shadowed by one in `inner/`.
+fn nested() -> Fixture {
+    Fixture::new()
         .write("vump.toml", "files = [\"VERSION\"]\n")
         .write("VERSION", "1.2.3\n")
         .write("inner/vump.toml", "files = [\"VERSION\"]\n")
         .write("inner/VERSION", "9.9.9\n")
-        .with_git();
+        .with_git()
+}
+
+#[test]
+fn a_nested_configuration_may_not_be_written_from_without_acknowledgement() {
+    // The accident this exists for: `vump patch --through push` run inside
+    // sandbox/npm/single-project tagged vump's own repository. Discovery stops
+    // at the nearest vump.toml, but the repository being written to is the one
+    // the outer configuration describes.
+    let fx = nested();
 
     let run = fx.run_in("inner", &["patch", "--through", "tag"]);
     assert_eq!(run.code, 3, "{}", run.output());
@@ -485,34 +490,55 @@ fn a_nested_configuration_may_not_commit_without_acknowledgement() {
 }
 
 #[test]
-fn a_nested_configuration_may_write_files_without_acknowledgement() {
-    // Only the commit and tag escape into a repository the configuration does
-    // not describe. Writing files inside a nested project is what the
-    // arrangement is for, and the sandbox depends on it staying usable.
-    let fx = Fixture::new()
-        .write("vump.toml", "files = [\"VERSION\"]\n")
-        .write("VERSION", "1.2.3\n")
-        .write("inner/vump.toml", "files = [\"VERSION\"]\n")
-        .write("inner/VERSION", "9.9.9\n")
-        .with_git();
+fn a_nested_configuration_is_refused_even_when_no_git_work_is_asked_for() {
+    // Writing is the line, not committing. Refusing only the runs that reach
+    // git would warn about the same layout sometimes and not others, and the
+    // files a bump writes sit in the outer repository's tree either way.
+    let fx = nested();
 
-    assert_eq!(fx.run_in("inner", &["patch", "--through", "none"]).code, 0);
-    assert_eq!(fx.read("inner/VERSION"), "9.9.10\n");
-    assert_eq!(
-        fx.read("VERSION"),
-        "1.2.3\n",
-        "the outer project must not move"
-    );
+    let run = fx.run_in("inner", &["patch", "--through", "none"]);
+    assert_eq!(run.code, 3, "{}", run.output());
+    assert_eq!(fx.read("inner/VERSION"), "9.9.9\n");
+}
+
+#[test]
+fn a_nested_dry_run_is_refused_rather_than_reporting_a_plan() {
+    // --dry-run reports what a real run would do. A plan for a run that would
+    // be refused is not that.
+    let fx = nested();
+
+    let run = fx.run_in("inner", &["patch", "--through", "none", "--dry-run"]);
+    assert_eq!(run.code, 3, "{}", run.output());
+}
+
+#[test]
+fn reading_a_nested_configuration_is_never_refused() {
+    // status and check change nothing, and are exactly what someone who has
+    // lost track of which directory they are in needs to be able to run.
+    let fx = nested();
+
+    assert_eq!(fx.run_in("inner", &["status"]).code, 0);
+    assert_eq!(fx.run_in("inner", &["check", "9.9.9"]).code, 0);
+
+    // Still reading the nested project rather than the outer one.
+    assert_eq!(fx.run_in("inner", &["check", "1.2.3"]).code, 4);
+}
+
+#[test]
+fn a_guided_run_refuses_before_asking_anything() {
+    // Run with stdin closed: reaching any prompt exits 2, because there is no
+    // terminal to ask on. Exiting 3 instead is what proves the refusal happens
+    // before the first question rather than after every answer is in.
+    let fx = nested();
+
+    let run = fx.run_in("inner", &[]);
+    assert_eq!(run.code, 3, "{}", run.output());
+    assert!(run.stderr.contains("inner/vump.toml"), "{}", run.stderr);
 }
 
 #[test]
 fn an_acknowledged_nested_configuration_proceeds() {
-    let fx = Fixture::new()
-        .write("vump.toml", "files = [\"VERSION\"]\n")
-        .write("VERSION", "1.2.3\n")
-        .write("inner/vump.toml", "files = [\"VERSION\"]\n")
-        .write("inner/VERSION", "9.9.9\n")
-        .with_git();
+    let fx = nested();
 
     let run = fx.run_in("inner", &["patch", "--through", "tag", "--allow-nested"]);
     assert_eq!(run.code, 0, "{}", run.output());

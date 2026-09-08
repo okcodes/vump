@@ -13,7 +13,7 @@ use clap::{Parser, Subcommand};
 use thiserror::Error;
 
 use crate::adapters::{GitCli, GitHubReleases, RealFileSystem, TerminalInteraction};
-use crate::app::change::{ChangeError, GitPlanning};
+use crate::app::change::{ChangeError, GitPlanning, Nesting};
 use crate::app::update::Channel;
 use crate::app::{self, AppError};
 use crate::config::{Config, ConfigError, GitThrough, TagStyle};
@@ -353,7 +353,7 @@ struct Context {
     config: Config,
     json: bool,
     project: Option<String>,
-    allow_nested: bool,
+    nesting: Nesting,
 }
 
 fn execute(cli: &Cli) -> Result<Exit, CliError> {
@@ -380,7 +380,11 @@ fn execute(cli: &Cli) -> Result<Exit, CliError> {
         config,
         json: cli.json,
         project: cli.project.clone(),
-        allow_nested: cli.allow_nested,
+        nesting: if cli.allow_nested {
+            Nesting::Allowed
+        } else {
+            Nesting::Refuse
+        },
     };
 
     let pre = |label, args: &PreReleaseArgs| Transition::PreRelease {
@@ -497,6 +501,12 @@ fn self_command(command: &SelfCommand, json: bool) -> Result<Exit, CliError> {
 fn interactive(ctx: &Context) -> Result<Exit, CliError> {
     let ask = TerminalInteraction::new();
 
+    // Before the first question rather than with the rest of planning, which
+    // happens once every answer is in. Making someone choose a bump and then
+    // telling them the run was never going to be allowed wastes the only thing
+    // a guided run is spending: their attention.
+    app::change::check_nesting(&ctx.fs, &ctx.root, ctx.nesting)?;
+
     // Which project.
     let project = match ctx.project.as_deref() {
         Some(name) => ctx.config.select(Some(name))?.clone(),
@@ -543,12 +553,12 @@ fn interactive(ctx: &Context) -> Result<Exit, CliError> {
         *transition,
         GitPlanning {
             through,
-            allow_nested: ctx.allow_nested,
             commit_message: &ctx.config.git.commit_message,
             tag: &tag_pattern,
             tag_style: ctx.config.git.tag_style,
             tag_message: &ctx.config.git.tag_message,
         },
+        ctx.nesting,
     )?;
 
     if !ask.confirm(&render::summary(&plan))? {
@@ -638,12 +648,12 @@ fn bump(
         transition,
         GitPlanning {
             through: git_args.through(&ctx.config.git),
-            allow_nested: ctx.allow_nested,
             commit_message: &ctx.config.git.commit_message,
             tag: &tag_pattern,
             tag_style: git_args.tag_style(&ctx.config.git),
             tag_message: &ctx.config.git.tag_message,
         },
+        ctx.nesting,
     )?;
 
     if dry_run {
@@ -687,12 +697,12 @@ fn set(ctx: &Context, version: &str, dry_run: bool, git_args: &GitArgs) -> Resul
         target,
         GitPlanning {
             through: git_args.through(&ctx.config.git),
-            allow_nested: ctx.allow_nested,
             commit_message: &ctx.config.git.commit_message,
             tag: &tag_pattern,
             tag_style: git_args.tag_style(&ctx.config.git),
             tag_message: &ctx.config.git.tag_message,
         },
+        ctx.nesting,
     )?;
 
     if dry_run {
