@@ -13,7 +13,7 @@ use clap::{Parser, Subcommand};
 use thiserror::Error;
 
 use crate::adapters::{GitCli, GitHubReleases, RealFileSystem, TerminalInteraction};
-use crate::app::change::{ChangeError, GitPlanning};
+use crate::app::change::{ChangeError, GitPlanning, Nesting};
 use crate::app::update::Channel;
 use crate::app::{self, AppError};
 use crate::config::{Config, ConfigError, GitThrough, TagStyle};
@@ -49,6 +49,14 @@ pub struct Cli {
     /// Select a project in a repository that declares several.
     #[arg(long, global = true, value_name = "NAME")]
     project: Option<String>,
+
+    /// Act on a vump.toml nested inside another's repository.
+    ///
+    /// Global because every command touching a project is refused from one,
+    /// reading included: the hazard is using the wrong configuration, not
+    /// writing through it.
+    #[arg(long, global = true)]
+    allow_nested: bool,
 }
 
 /// The operation to perform.
@@ -351,11 +359,21 @@ struct Context {
 fn execute(cli: &Cli) -> Result<Exit, CliError> {
     let cwd = std::env::current_dir().map_err(|e| CliError::WorkingDirectory(e.to_string()))?;
 
+    let nesting = if cli.allow_nested {
+        Nesting::Allowed
+    } else {
+        Nesting::Refuse
+    };
+
     // init and update operate on the installation rather than on a project, so
     // they run before configuration is looked for. init exists precisely
     // because there is none yet.
     match &cli.command {
         Some(Command::Init { force }) => {
+            // Refused here too, and this is the place it matters most: writing
+            // a configuration under one that already exists is what creates
+            // the arrangement every other command then has to refuse.
+            app::change::check_nesting(&RealFileSystem, &cwd, nesting)?;
             let written = app::init::init(&RealFileSystem, &cwd, *force)?;
             render::init(&written, cli.json);
             return Ok(Exit::Success);
@@ -365,6 +383,11 @@ fn execute(cli: &Cli) -> Result<Exit, CliError> {
     }
 
     let (root, config) = Config::discover(&cwd)?;
+
+    // Every command acting on a project is covered, before any of them runs.
+    // One gate at the point configuration becomes known, rather than a check
+    // per use case that a later command could be written without.
+    app::change::check_nesting(&RealFileSystem, &root, nesting)?;
 
     let ctx = Context {
         fs: RealFileSystem,
@@ -883,6 +906,7 @@ impl CliError {
                 ChangeError::Transition(_) => Exit::InvalidTransition,
                 ChangeError::OutOfSync { .. } => Exit::OutOfSync,
                 ChangeError::DirtyTree { .. } => Exit::DirtyTree,
+                ChangeError::NestedConfig { .. } => Exit::Config,
                 ChangeError::Vcs(_) => Exit::Git,
             },
         }

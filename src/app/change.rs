@@ -147,6 +147,18 @@ pub struct GitPlanning<'a> {
     pub tag_message: &'a str,
 }
 
+/// Whether a run may act on a configuration nested inside another's.
+///
+/// A closed pair rather than a bare boolean, so the intent is legible where it
+/// is passed rather than only where it is declared.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Nesting {
+    /// Refuse, naming the outer configuration and the way out.
+    Refuse,
+    /// Proceed: the caller passed `--allow-nested`.
+    Allowed,
+}
+
 /// Why a change could not be planned or applied.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ChangeError {
@@ -179,6 +191,29 @@ pub enum ChangeError {
         changed: Vec<String>,
     },
 
+    /// A configuration nested inside another's repository was acted on.
+    ///
+    /// Refused rather than warned: by the time a warning about a pushed tag is
+    /// printed, the tag is on the remote, and a warning above a `check` verdict
+    /// does not stop the verdict being believed.
+    #[error(
+        "{inner} sits inside a repository that {outer} describes, so this acts on the \
+         nested project rather than on the repository: a bump would commit and tag \
+         into the repository even so, and a check would answer about the wrong \
+         project.\n\n\
+         A repository holding several projects that version separately declares them \
+         as [[project]] entries in one {file}, which is what lets them be addressed \
+         by name from anywhere. Giving each its own {file} gives that up.\n\n\
+         Pass --allow-nested to proceed anyway.",
+        file = crate::config::FILE_NAME
+    )]
+    NestedConfig {
+        /// The configuration in effect, relative to the outer one.
+        inner: String,
+        /// The configuration describing the repository.
+        outer: String,
+    },
+
     /// A git operation failed.
     #[error("{0}")]
     Vcs(#[from] VcsError),
@@ -191,6 +226,60 @@ fn format_disagreement(found: &[(String, Version)]) -> String {
         .map(|(path, version)| format!("  {path:<width$}  {version}"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Refuses to act on a configuration nested inside another's repository.
+///
+/// Every command touching a project is covered, reading included. The hazard
+/// is not writing but using the wrong configuration at all: `check` answers
+/// whether a version matches, and a nested project whose version happens to
+/// coincide answers yes about the wrong project — a confident false pass from
+/// the one command whose purpose is catching a version that lies. Refusing
+/// only some commands would also warn about one layout sometimes and not
+/// others, which reads as arbitrary and teaches nothing.
+///
+/// `init` is covered for the opposite reason: it is where the arrangement
+/// every other command refuses would come into being.
+///
+/// Called once, where configuration becomes known and before any command runs,
+/// so that a refusal costs no work and no later command can be written without
+/// it.
+///
+/// # Errors
+///
+/// Returns [`ChangeError::NestedConfig`] when an outer configuration exists
+/// and the caller has not acknowledged it.
+pub fn check_nesting(
+    fs: &dyn FileSystem,
+    root: &Path,
+    nesting: Nesting,
+) -> Result<(), ChangeError> {
+    if nesting == Nesting::Allowed {
+        return Ok(());
+    }
+    let Some(outer) = crate::app::outer_config(fs, root) else {
+        return Ok(());
+    };
+
+    // Paths are shown relative to the repository the write would land in,
+    // which is the frame the reader needs to see where they actually are, and
+    // with forward slashes on every platform to match how a path is written in
+    // vump.toml and reported by every other message.
+    let base = outer.parent().unwrap_or(&outer);
+    let inner = root.join(crate::config::FILE_NAME);
+    let show = |path: &Path| {
+        path.strip_prefix(base)
+            .unwrap_or(path)
+            .components()
+            .map(|part| part.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/")
+    };
+
+    Err(ChangeError::NestedConfig {
+        inner: show(&inner),
+        outer: show(&outer),
+    })
 }
 
 /// Builds the change set that writing `target` would produce.

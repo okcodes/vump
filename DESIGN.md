@@ -242,6 +242,45 @@ neither can be mistaken for a release of vump.
 Treat "how do I make per-directory configurations work" as a question with a
 different answer: one `vump.toml`, several `[[project]]` entries.
 
+**Git work from a nested configuration is refused**, naming the outer
+configuration and pointing at `[[project]]`. Refused rather than warned, for the
+same reason a release publishing no checksums is: a warning is visible in a
+guided run and useless everywhere else, and by the time one is printed about a
+pushed tag the tag is on the remote.
+
+`--allow-nested` proceeds anyway. It is a flag rather than a setting in the
+nested file deliberately. A setting would answer the question once and stay
+answered, pre-approving every later run from that directory including the
+accidental one, and nobody re-reads a `vump.toml` before typing `vump`. The flag
+asks again every time, which is what a person who has forgotten where they are
+standing needs. Its inconvenience is the point rather than a cost: it is a
+standing reminder that `[[project]]` is going unused, and the way to stop typing
+it is to restructure the configuration rather than to keep typing it.
+
+That places it outside the rule above about a flag mirroring a setting. This is
+not a preference with a default worth overriding, but an acknowledgement of a
+hazard already detected — the same shape as `vump init --force`, which is also a
+flag and would gain nothing from being spelled in a file.
+
+**Every command touching a project is refused, reading included.** The hazard
+is not writing but operating on the wrong configuration at all, and `check` is
+the sharpest case rather than an exception to it: it answers whether a version
+matches, so a nested project whose version happens to coincide answers *yes*
+about the wrong project — a confident false pass, from the one command whose
+whole purpose is catching a version that lies. A refused write is a mistake
+someone notices; a wrong verdict is one they believe.
+
+`init` is refused for the opposite reason: writing a configuration beneath one
+that already exists is where the arrangement every other command refuses comes
+into being.
+
+Only `self` commands are exempt, and only because they act on the installed
+binary and never load a configuration at all.
+
+That leaves one rule with no carve-outs to remember, and one gate: the check
+runs where configuration becomes known, before any command is dispatched, so a
+command added later cannot be written without it.
+
 ### Tag patterns
 
 `tag_pattern` may be set per project, overriding the repository-wide one, and
@@ -395,6 +434,7 @@ vump self list            List published releases
 | `--project <name>`  | all             | Select a project in a multi-project repository |
 | `--through <step>`  | bump commands   | How far to carry the release: `none`, `commit`, `tag`, `push` |
 | `--tag-style <style>` | bump commands | How the tag object is written                  |
+| `--allow-nested`    | global          | Permit git work from a nested configuration    |
 | `--json`            | global          | Machine-readable output                        |
 
 Both replace the `[git]` setting of the same name for one run. There is no

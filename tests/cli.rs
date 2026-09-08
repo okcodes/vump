@@ -54,6 +54,33 @@ impl Fixture {
         Run::from(output)
     }
 
+    /// Runs vump from a subdirectory, with stdin closed.
+    ///
+    /// Configuration is discovered by searching upward, so where vump is run
+    /// from is part of its behavior and has to be expressible in a test.
+    fn run_in(&self, dir: &str, args: &[&str]) -> Run {
+        let output = Command::new(env!("CARGO_BIN_EXE_vump"))
+            .args(args)
+            .current_dir(self.dir.path().join(dir))
+            .stdin(Stdio::null())
+            .output()
+            .expect("cannot run vump");
+        Run::from(output)
+    }
+
+    /// Runs git in a subdirectory of the fixture.
+    fn git_in(&self, dir: &str, args: &[&str]) -> &Self {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(self.dir.path().join(dir))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("cannot run git");
+        assert!(status.success(), "git {args:?} failed");
+        self
+    }
+
     /// Tags present in the fixture repository, in git's own order.
     fn tags(&self) -> Vec<String> {
         let out = Command::new("git")
@@ -425,6 +452,149 @@ fn a_repository_that_declares_no_git_work_gets_none() {
     assert_eq!(fx.read("VERSION"), "1.2.4\n");
 
     assert!(fx.tags().is_empty());
+}
+
+/// A repository whose own configuration is shadowed by one in `inner/`.
+fn nested() -> Fixture {
+    Fixture::new()
+        .write("vump.toml", "files = [\"VERSION\"]\n")
+        .write("VERSION", "1.2.3\n")
+        .write("inner/vump.toml", "files = [\"VERSION\"]\n")
+        .write("inner/VERSION", "9.9.9\n")
+        .with_git()
+}
+
+#[test]
+fn a_nested_configuration_may_not_be_written_from_without_acknowledgement() {
+    // The accident this exists for: `vump patch --through push` run inside
+    // sandbox/npm/single-project tagged vump's own repository. Discovery stops
+    // at the nearest vump.toml, but the repository being written to is the one
+    // the outer configuration describes.
+    let fx = nested();
+
+    let run = fx.run_in("inner", &["patch", "--through", "tag"]);
+    assert_eq!(run.code, 3, "{}", run.output());
+
+    // The message has to say where the caller actually is, or it reads as an
+    // obstacle to get past rather than as a wrong turn.
+    //
+    // The forward slash is deliberate and asserted on every platform: paths are
+    // written that way in vump.toml, so a message that reported one back with a
+    // Windows separator would not match what the reader is looking at.
+    assert!(run.stderr.contains("inner/vump.toml"), "{}", run.stderr);
+    assert!(run.stderr.contains("[[project]]"), "{}", run.stderr);
+
+    // Refusing must leave everything as it was.
+    assert_eq!(fx.read("inner/VERSION"), "9.9.9\n");
+    assert!(fx.tags().is_empty());
+}
+
+#[test]
+fn a_nested_configuration_is_refused_even_when_no_git_work_is_asked_for() {
+    // Writing is the line, not committing. Refusing only the runs that reach
+    // git would warn about the same layout sometimes and not others, and the
+    // files a bump writes sit in the outer repository's tree either way.
+    let fx = nested();
+
+    let run = fx.run_in("inner", &["patch", "--through", "none"]);
+    assert_eq!(run.code, 3, "{}", run.output());
+    assert_eq!(fx.read("inner/VERSION"), "9.9.9\n");
+}
+
+#[test]
+fn a_nested_dry_run_is_refused_rather_than_reporting_a_plan() {
+    // --dry-run reports what a real run would do. A plan for a run that would
+    // be refused is not that.
+    let fx = nested();
+
+    let run = fx.run_in("inner", &["patch", "--through", "none", "--dry-run"]);
+    assert_eq!(run.code, 3, "{}", run.output());
+}
+
+#[test]
+fn even_reading_a_nested_configuration_is_refused() {
+    // Writing is not the hazard; using the wrong configuration at all is.
+    // `check` is the sharpest case: it answers whether a version matches, and
+    // a nested project whose version happens to coincide would answer yes
+    // about the wrong project — a confident false pass from the one command
+    // whose whole job is catching a version that lies.
+    let fx = nested();
+
+    assert_eq!(fx.run_in("inner", &["status"]).code, 3);
+    assert_eq!(fx.run_in("inner", &["check", "9.9.9"]).code, 3);
+
+    // The refusal is more informative than status was: it names both.
+    let run = fx.run_in("inner", &["status"]);
+    assert!(run.stderr.contains("inner/vump.toml"), "{}", run.stderr);
+}
+
+#[test]
+fn init_refuses_to_create_a_nested_configuration() {
+    // The place it matters most: this is where the arrangement every other
+    // command has to refuse would come into being.
+    let fx = Fixture::new()
+        .write("vump.toml", "files = [\"VERSION\"]\n")
+        .write("VERSION", "1.2.3\n")
+        .write("inner/VERSION", "9.9.9\n")
+        .with_git();
+
+    let run = fx.run_in("inner", &["init"]);
+    assert_eq!(run.code, 3, "{}", run.output());
+    assert!(run.stderr.contains("[[project]]"), "{}", run.stderr);
+    assert!(
+        !fx.path().join("inner/vump.toml").exists(),
+        "refusing must not leave a configuration behind"
+    );
+}
+
+#[test]
+fn init_at_the_repository_root_is_unaffected() {
+    let fx = Fixture::new().write("VERSION", "1.2.3\n").with_git();
+
+    assert_eq!(fx.run(&["init"]).code, 0);
+    assert!(fx.path().join("vump.toml").exists());
+}
+
+#[test]
+fn a_guided_run_refuses_before_asking_anything() {
+    // Run with stdin closed: reaching any prompt exits 2, because there is no
+    // terminal to ask on. Exiting 3 instead is what proves the refusal happens
+    // before the first question rather than after every answer is in.
+    let fx = nested();
+
+    let run = fx.run_in("inner", &[]);
+    assert_eq!(run.code, 3, "{}", run.output());
+    assert!(run.stderr.contains("inner/vump.toml"), "{}", run.stderr);
+}
+
+#[test]
+fn an_acknowledged_nested_configuration_proceeds() {
+    let fx = nested();
+
+    let run = fx.run_in("inner", &["patch", "--through", "tag", "--allow-nested"]);
+    assert_eq!(run.code, 0, "{}", run.output());
+    assert_eq!(fx.tags(), ["v9.9.10"]);
+}
+
+#[test]
+fn a_configuration_at_the_repository_root_is_not_nested() {
+    // A vump.toml above the repository root describes a different repository
+    // and says nothing about this one, so the search must stop at the root
+    // rather than walking to the filesystem's.
+    let fx = Fixture::new()
+        .write("outer-vump-decoy/vump.toml", "files = [\"VERSION\"]\n")
+        .write("repo/vump.toml", "files = [\"VERSION\"]\n")
+        .write("repo/VERSION", "1.2.3\n");
+
+    fx.git_in("repo", &["init", "-q", "."]);
+    fx.git_in("repo", &["config", "user.email", "test@example.com"]);
+    fx.git_in("repo", &["config", "user.name", "Test"]);
+    fx.git_in("repo", &["config", "commit.gpgsign", "false"]);
+    fx.git_in("repo", &["add", "-A"]);
+    fx.git_in("repo", &["commit", "-qm", "initial"]);
+
+    let run = fx.run_in("repo", &["patch", "--through", "tag"]);
+    assert_eq!(run.code, 0, "{}", run.output());
 }
 
 #[test]
@@ -1271,7 +1441,7 @@ fn the_sandbox_projects_stay_usable() {
         "cs/multi-project",
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_vump"))
-            .arg("status")
+            .args(["status", "--allow-nested"])
             .current_dir(sandbox.join(project))
             .stdin(Stdio::null())
             .output()
@@ -1304,7 +1474,16 @@ fn no_sandbox_project_can_produce_a_release_shaped_tag() {
         ("cs/single-project", None),
         ("cs/multi-project", Some("project-b")),
     ] {
-        let mut args = vec!["patch", "--through", "tag", "--dry-run", "--json"];
+        // --allow-nested is the point of this test: it asks for the tag a
+        // nested configuration would create, precisely to inspect its shape.
+        let mut args = vec![
+            "patch",
+            "--through",
+            "tag",
+            "--dry-run",
+            "--json",
+            "--allow-nested",
+        ];
         if let Some(name) = select {
             args.extend(["--project", name]);
         }
