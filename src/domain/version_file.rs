@@ -96,7 +96,10 @@ impl Tracked {
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum VersionFileError {
     /// The filename is not one vump recognizes.
-    #[error("unsupported file {name:?}; expected package.json, Cargo.toml, Cargo.lock, or VERSION")]
+    #[error(
+        "unsupported file {name:?}; expected package.json, package-lock.json, Cargo.toml, \
+         Cargo.lock, VERSION, or a .csproj, .fsproj or .vbproj project"
+    )]
     UnsupportedFile {
         /// The filename that could not be classified.
         name: String,
@@ -881,6 +884,26 @@ mod tests {
 
     fn v(text: &str) -> Version {
         text.parse().expect("test version literal must be valid")
+    }
+
+    #[test]
+    fn the_unsupported_message_names_every_supported_form() {
+        // The message is the only place the supported set is written out for a
+        // reader, and nothing tied it to the set itself: it named four of six
+        // for two releases, telling .NET users their format was not supported.
+        let message = Tracked::require("nope.txt").unwrap_err().to_string();
+        for form in [
+            "package.json",
+            "package-lock.json",
+            "Cargo.toml",
+            "Cargo.lock",
+            "VERSION",
+            ".csproj",
+            ".fsproj",
+            ".vbproj",
+        ] {
+            assert!(message.contains(form), "{form} missing from {message:?}");
+        }
     }
 
     #[test]
