@@ -12,6 +12,8 @@ use crate::ports::{Annotation, Vcs, VcsError, WorkingTree};
 /// One operation performed against the repository.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VcsCall {
+    /// The current branch was asked for.
+    Branch,
     /// Paths were staged.
     Stage(Vec<String>),
     /// A commit was created with this message.
@@ -23,11 +25,28 @@ pub enum VcsCall {
 }
 
 /// A scriptable [`Vcs`] that records calls instead of performing them.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct MemoryVcs {
     tree: Mutex<WorkingTree>,
     calls: Mutex<Vec<VcsCall>>,
     failing: Mutex<Option<(String, String)>>,
+    branch: Mutex<Option<String>>,
+}
+
+impl Default for MemoryVcs {
+    /// A clean repository on `main`.
+    ///
+    /// On a branch rather than detached, because that is the state nearly every
+    /// test is about and the one a caller is in when nothing special is being
+    /// arranged.
+    fn default() -> Self {
+        Self {
+            tree: Mutex::default(),
+            calls: Mutex::default(),
+            failing: Mutex::default(),
+            branch: Mutex::new(Some("main".to_owned())),
+        }
+    }
 }
 
 impl MemoryVcs {
@@ -35,6 +54,20 @@ impl MemoryVcs {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Places `HEAD` on `name`.
+    #[must_use]
+    pub fn on_branch(self, name: &str) -> Self {
+        *lock(&self.branch) = Some(name.to_owned());
+        self
+    }
+
+    /// Detaches `HEAD`, so the repository is on no branch at all.
+    #[must_use]
+    pub fn detached(self) -> Self {
+        *lock(&self.branch) = None;
+        self
     }
 
     /// Marks the working tree as carrying uncommitted changes.
@@ -83,6 +116,14 @@ impl Vcs for MemoryVcs {
     fn status(&self) -> Result<WorkingTree, VcsError> {
         self.guard("status")?;
         Ok(lock(&self.tree).clone())
+    }
+
+    fn current_branch(&self) -> Result<Option<String>, VcsError> {
+        self.guard("branch")?;
+        // Recorded like any other call: asking the repository more often than
+        // the answer can change is a defect a test should be able to see.
+        self.record(VcsCall::Branch);
+        Ok(lock(&self.branch).clone())
     }
 
     fn stage(&self, paths: &[String]) -> Result<(), VcsError> {

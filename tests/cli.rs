@@ -81,6 +81,20 @@ impl Fixture {
         self
     }
 
+    /// Moves the repository onto `name`, creating it.
+    ///
+    /// Named explicitly rather than relying on whatever `git init` chose: the
+    /// default branch depends on the machine's git configuration, and a test
+    /// about branch names cannot be at the mercy of one.
+    fn branch(&self, name: &str) -> &Self {
+        self.git(&["checkout", "-q", "-b", name])
+    }
+
+    /// Leaves the repository on no branch at all.
+    fn detach(&self) -> &Self {
+        self.git(&["checkout", "-q", "--detach"])
+    }
+
     /// Tags present in the fixture repository, in git's own order.
     fn tags(&self) -> Vec<String> {
         let out = Command::new("git")
@@ -1542,6 +1556,161 @@ fn a_repository_of_its_own_does_not_excuse_a_nested_configuration() {
     fx.git_in("inner", &["init", "-q", "."]);
     assert_eq!(fx.run_in("inner", &["status"]).code, 3);
     assert_eq!(fx.run_in("inner", &["status", "--allow-nested"]).code, 0);
+}
+
+// ─── Release branches ────────────────────────────────────────────────────────
+
+/// A repository that tags stable releases only from `main`, sitting on `feat/x`.
+fn off_release_branch() -> Fixture {
+    let fx = Fixture::new()
+        .write(
+            "vump.toml",
+            "files = [\"VERSION\"]\n\n[git]\nrelease_branches = [\"main\"]\n",
+        )
+        .write("VERSION", "1.2.3\n")
+        .with_git();
+    fx.branch("feat/x");
+    fx
+}
+
+#[test]
+fn a_stable_release_from_an_unlisted_branch_is_refused() {
+    // The accident this exists for: the pull request is merged and its branch
+    // deleted upstream, but the local checkout is still on it, so the release
+    // commit and tag land somewhere nothing will reach again.
+    let fx = off_release_branch();
+
+    let run = fx.run(&["patch", "--through", "tag"]);
+    assert_eq!(run.code, 3, "{}", run.output());
+    assert!(run.stderr.contains("feat/x"), "{}", run.stderr);
+    assert!(run.stderr.contains("main"), "{}", run.stderr);
+
+    // Refusing must leave everything as it was, files included: the check runs
+    // before the first write, not after it.
+    assert_eq!(fx.read("VERSION"), "1.2.3\n");
+    assert!(fx.tags().is_empty());
+}
+
+#[test]
+fn a_refused_release_is_refused_as_a_dry_run_too() {
+    // --dry-run reports what a real run would do. A plan for a run that would
+    // be refused is not that.
+    let fx = off_release_branch();
+
+    let run = fx.run(&["patch", "--through", "tag", "--dry-run"]);
+    assert_eq!(run.code, 3, "{}", run.output());
+}
+
+#[test]
+fn any_branch_proceeds_and_says_so() {
+    // Waived, not silenced: the flag is an acknowledgement, so the run still
+    // reports what was acknowledged.
+    let fx = off_release_branch();
+
+    let run = fx.run(&["patch", "--through", "tag", "--any-branch"]);
+    assert_eq!(run.code, 0, "{}", run.output());
+    assert_eq!(fx.tags(), ["v1.2.4"]);
+    assert!(run.stderr.contains("feat/x"), "{}", run.stderr);
+    assert!(run.stderr.contains("release_branches"), "{}", run.stderr);
+}
+
+#[test]
+fn a_pre_release_is_not_governed_by_the_stable_list() {
+    // Sharing unfinished work is what a pre-release is for. Constraining it
+    // with the stable list would mean merging first, every time.
+    let fx = off_release_branch();
+
+    let run = fx.run(&["alpha", "--from", "patch", "--through", "tag"]);
+    assert_eq!(run.code, 0, "{}", run.output());
+    assert_eq!(fx.tags(), ["v1.2.4-alpha.0"]);
+}
+
+#[test]
+fn a_pre_release_can_be_constrained_on_its_own() {
+    let fx = Fixture::new()
+        .write(
+            "vump.toml",
+            "files = [\"VERSION\"]\n\n[git]\nprerelease_branches = [\"develop\"]\n",
+        )
+        .write("VERSION", "1.2.3\n")
+        .with_git();
+    fx.branch("feat/x");
+
+    let run = fx.run(&["alpha", "--from", "patch", "--through", "tag"]);
+    assert_eq!(run.code, 3, "{}", run.output());
+    assert!(run.stderr.contains("develop"), "{}", run.stderr);
+
+    // The stable list is unset, so stable releases stay unconstrained.
+    assert_eq!(fx.run(&["patch", "--through", "tag"]).code, 0);
+}
+
+#[test]
+fn a_listed_branch_releases() {
+    let fx = Fixture::new()
+        .write(
+            "vump.toml",
+            "files = [\"VERSION\"]\n\n[git]\nrelease_branches = [\"main\", \"release\"]\n",
+        )
+        .write("VERSION", "1.2.3\n")
+        .with_git();
+    fx.branch("release");
+
+    let run = fx.run(&["patch", "--through", "tag"]);
+    assert_eq!(run.code, 0, "{}", run.output());
+    assert_eq!(fx.tags(), ["v1.2.4"]);
+}
+
+#[test]
+fn writing_files_without_git_is_not_governed() {
+    // Nothing is left behind that could belong to the wrong branch, and
+    // refusing it would block bumping a version inside a pull request — which
+    // is where a version is supposed to change.
+    let fx = off_release_branch();
+
+    let run = fx.run(&["patch", "--through", "none"]);
+    assert_eq!(run.code, 0, "{}", run.output());
+    assert_eq!(fx.read("VERSION"), "1.2.4\n");
+    assert!(fx.tags().is_empty());
+}
+
+#[test]
+fn a_detached_head_is_refused_where_a_policy_exists() {
+    let fx = off_release_branch();
+    fx.detach();
+
+    let run = fx.run(&["patch", "--through", "tag"]);
+    assert_eq!(run.code, 3, "{}", run.output());
+    assert!(run.stderr.contains("detached"), "{}", run.stderr);
+    assert!(fx.tags().is_empty());
+}
+
+#[test]
+fn no_policy_leaves_every_branch_releasing() {
+    // The check is opt-in in both directions: without it, a detached HEAD is
+    // nobody's problem but the caller's.
+    let fx = Fixture::new()
+        .write("vump.toml", "files = [\"VERSION\"]\n")
+        .write("VERSION", "1.2.3\n")
+        .with_git();
+    fx.branch("feat/x");
+
+    let run = fx.run(&["patch", "--through", "tag"]);
+    assert_eq!(run.code, 0, "{}", run.output());
+    assert_eq!(fx.tags(), ["v1.2.4"]);
+}
+
+#[test]
+fn an_empty_branch_list_is_refused_before_anything_runs() {
+    let fx = Fixture::new()
+        .write(
+            "vump.toml",
+            "files = [\"VERSION\"]\n\n[git]\nrelease_branches = []\n",
+        )
+        .write("VERSION", "1.2.3\n");
+
+    let run = fx.run(&["status"]);
+    assert_eq!(run.code, 3, "{}", run.output());
+    assert!(run.stderr.contains("release_branches"), "{}", run.stderr);
 }
 
 // ─── Sandbox ─────────────────────────────────────────────────────────────────

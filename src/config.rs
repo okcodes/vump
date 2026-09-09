@@ -162,6 +162,19 @@ pub struct GitSettings {
     pub tag_style: TagStyle,
     /// Template for the message carried by an annotated or signed tag.
     pub tag_message: String,
+    /// Branches a stable release may be tagged from, or `None` when any may.
+    ///
+    /// The absence is genuine: no policy has been declared, so none is
+    /// enforced. An empty list is refused when the file is read, because
+    /// "no branch may ever release" is a typo every time it is written.
+    pub release_branches: Option<Vec<String>>,
+    /// Branches a pre-release may be tagged from, or `None` when any may.
+    ///
+    /// Separate from stable releases because the two are held to different
+    /// standards nearly everywhere: a stable tag is what people install and
+    /// comes from the trunk, while a pre-release is how unfinished work is
+    /// shared without merging it first.
+    pub prerelease_branches: Option<Vec<String>>,
 }
 
 impl Default for GitSettings {
@@ -172,6 +185,8 @@ impl Default for GitSettings {
             tag_pattern: DEFAULT_TAG_PATTERN.to_owned(),
             tag_style: TagStyle::default(),
             tag_message: DEFAULT_TAG_MESSAGE.to_owned(),
+            release_branches: None,
+            prerelease_branches: None,
         }
     }
 }
@@ -186,6 +201,18 @@ pub enum ConfigError {
     NotFound {
         /// Directory the upward search started from.
         start: PathBuf,
+    },
+
+    /// A branch list was declared with nothing in it.
+    #[error(
+        "{key} in {path} lists no branches, so no release could ever be made; \
+         name the branches allowed, or remove the key to allow any"
+    )]
+    NoBranchesListed {
+        /// The file the empty list was read from.
+        path: PathBuf,
+        /// Which of the two keys was empty.
+        key: &'static str,
     },
 
     /// The file exists but could not be read.
@@ -326,6 +353,21 @@ impl Config {
             return Err(ConfigError::MixedForms {
                 path: path.to_path_buf(),
             });
+        }
+
+        // Refused at the point of reading rather than at the point of release:
+        // an empty list can only ever refuse, so the run that discovers it is
+        // never the run that can act on the answer.
+        for (key, branches) in [
+            ("release_branches", &raw.git.release_branches),
+            ("prerelease_branches", &raw.git.prerelease_branches),
+        ] {
+            if branches.as_ref().is_some_and(Vec::is_empty) {
+                return Err(ConfigError::NoBranchesListed {
+                    path: path.to_path_buf(),
+                    key,
+                });
+            }
         }
 
         let projects = if raw.project.is_empty() {
@@ -528,6 +570,21 @@ impl Config {
 }
 
 impl GitSettings {
+    /// Branches a release of `target`'s maturity may be tagged from.
+    ///
+    /// `None` means unconstrained. The split is at the version's pre-release
+    /// component rather than at the command that produced it, so `set 1.2.3` is
+    /// governed exactly as `patch` is and `set 1.2.3-beta.1` exactly as `beta`
+    /// is. Nothing has to enumerate which commands release.
+    #[must_use]
+    pub fn branches_for(&self, target: &semver::Version) -> Option<&[String]> {
+        if target.pre.is_empty() {
+            self.release_branches.as_deref()
+        } else {
+            self.prerelease_branches.as_deref()
+        }
+    }
+
     /// Renders a template, substituting the version and the project name.
     ///
     /// `{project}` is available here as well as in tag patterns: in a
@@ -583,6 +640,8 @@ struct RawGit {
     tag_pattern: Option<String>,
     tag_style: Option<TagStyle>,
     tag_message: Option<String>,
+    release_branches: Option<Vec<String>>,
+    prerelease_branches: Option<Vec<String>>,
 }
 
 impl From<RawGit> for GitSettings {
@@ -594,6 +653,8 @@ impl From<RawGit> for GitSettings {
             tag_pattern: raw.tag_pattern.unwrap_or(defaults.tag_pattern),
             tag_style: raw.tag_style.unwrap_or(defaults.tag_style),
             tag_message: raw.tag_message.unwrap_or(defaults.tag_message),
+            release_branches: raw.release_branches,
+            prerelease_branches: raw.prerelease_branches,
         }
     }
 }
@@ -604,6 +665,49 @@ mod tests {
 
     fn parse(text: &str) -> Result<Config, ConfigError> {
         Config::parse(Path::new("vump.toml"), text)
+    }
+
+    #[test]
+    fn an_empty_branch_list_is_refused() {
+        // A list with nothing in it can only ever refuse, and the run that
+        // reads it is never the run that can act on the answer.
+        for key in ["release_branches", "prerelease_branches"] {
+            let err = parse(&format!("files = [\"VERSION\"]\n\n[git]\n{key} = []\n")).unwrap_err();
+            assert!(err.to_string().contains(key), "{err}");
+        }
+    }
+
+    #[test]
+    fn the_targets_maturity_chooses_the_branch_list() {
+        let config = parse(
+            "files = [\"VERSION\"]\n\n[git]\nrelease_branches = [\"main\"]\nprerelease_branches = [\"develop\"]\n",
+        )
+        .unwrap();
+
+        let stable: semver::Version = "1.2.3".parse().unwrap();
+        let pre: semver::Version = "1.2.3-rc.1".parse().unwrap();
+        assert_eq!(
+            config.git.branches_for(&stable),
+            Some(&["main".to_owned()][..])
+        );
+        assert_eq!(
+            config.git.branches_for(&pre),
+            Some(&["develop".to_owned()][..])
+        );
+    }
+
+    #[test]
+    fn branch_lists_are_absent_unless_declared() {
+        // Absence is the unconstrained state, not an empty list standing in for
+        // one: nothing has been declared, so nothing is enforced.
+        let config = parse("files = [\"VERSION\"]\n").unwrap();
+
+        assert_eq!(config.git.release_branches, None);
+        assert_eq!(config.git.branches_for(&"1.2.3".parse().unwrap()), None);
+        assert_eq!(
+            config.git.branches_for(&"1.2.3-rc.1".parse().unwrap()),
+            None
+        );
     }
 
     #[test]

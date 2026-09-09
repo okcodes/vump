@@ -15,3 +15,12 @@ files = ["Cargo.toml", "Cargo.lock"]
 through = "tag"
 commit_message = "chore: bump version to v{new_version}"
 tag_pattern = "v{new_version}"
+
+# Stable releases come from main, which is where every one of them has been cut.
+# The accident this prevents: merging a pull request, staying on its now-deleted
+# branch, and tagging a release onto a commit nothing upstream reaches.
+release_branches = ["main"]
+
+# prerelease_branches is deliberately unset. Alphas here are cut from the branch
+# doing the work — that is how every one so far has been made — and constraining
+# them would mean merging before they could be shared.

@@ -330,6 +330,8 @@ commit_message = "chore: bump version to v{new_version}"
 tag_pattern = "v{new_version}"
 tag_style = "annotated"          # or "lightweight", or "signed"
 tag_message = "Release {new_version}"
+release_branches = ["main"]      # optional; unset means any branch
+prerelease_branches = ["main"]   # optional; unset means any branch
 ```
 
 **How far a bump goes is one ordered setting, not several booleans.** The steps
@@ -384,6 +386,70 @@ reach. `tag_pattern` deliberately does not. `check` reads it in reverse to work
 out which project a pushed tag belongs to, so a one-run override would produce
 a tag that verification cannot attribute — the pattern is a parser, not a
 preference.
+
+#### Where a release may be tagged from
+
+`release_branches` and `prerelease_branches` name the branches a release may be
+tagged from. Both are optional and independent, and **absence means
+unconstrained** — an empty list is refused when the file is read, because it
+could only ever refuse and the run that reads it is never the run that can act
+on the answer.
+
+**Which list applies is decided by the version, not by the command.** A target
+carrying a pre-release component answers to `prerelease_branches`; one without
+answers to `release_branches`. So `set 1.2.3` is governed exactly as `patch` is
+and `set 1.2.3-beta.1` exactly as `beta` is, and nothing has to enumerate which
+commands release.
+
+**They are separate settings because the two are held to different standards
+almost everywhere.** A stable tag is what people install, and every release
+tool agrees it comes from the trunk. A pre-release is how unfinished work is
+shared *without* merging it first — GitVersion derives a pre-release label from
+the feature branch as its core model, and semantic-release ships prerelease
+branches by default. Constraining both with one list would mean merging before
+sharing, which is the thing a pre-release exists to avoid.
+
+The reason to make it configurable at all rather than simply exempting
+pre-releases: the tools that publish freely from feature branches mostly do not
+write a durable git tag — GitVersion computes a version without tagging, and a
+changesets snapshot is a dist-tag publish. vump writes a real tag, which
+outlives the branch. So the practice is mainstream but not free here, and a
+team that would rather not pay for it can say so.
+
+**Only a run that reaches a commit is covered.** A run that writes files and
+stops leaves nothing behind that could belong to the wrong branch, and refusing
+it would block bumping a version inside a pull request — which is where a
+version is supposed to change. This is narrower than the nesting refusal
+deliberately: nesting refuses reading too, because `check` can pass confidently
+about the wrong project, and reading on a feature branch is not wrong in that
+way.
+
+The check runs once the plan is composed and before it is applied, so the target
+version is known and a refusal has still written nothing. A `--dry-run` is
+refused as well, on the same reasoning as a nested one: a plan for a run that
+would be refused is not a plan.
+
+**A detached `HEAD` is refused where a policy exists**, since a tag made there
+belongs to no branch at all. Where no policy exists it is nobody's business but
+the caller's — the check is opt-in in both directions.
+
+**The guided run marks rather than refuses.** A bump the policy excludes is
+listed and marked, not dropped: an option that is simply missing is something
+to work out, whereas one shown as blocked explains itself. Choosing it asks
+again rather than proceeding. Where nothing at all is selectable there is no
+menu to show, so the refusal is raised directly. `--any-branch` brings the same
+bumps back marked — the flag restores the choice, it does not make it look
+safe. Every one of those answers comes from the same `check_branch` a
+non-interactive run uses, so the menu and the refusal cannot disagree, and the
+questioner is not trusted to honour the marking: a blocked bump returned anyway
+is refused by the rule.
+
+`--any-branch` proceeds anyway, and the run says what it waived. That notice is
+not the one [`BACKLOG.md`](BACKLOG.md) decided against: that entry rejected
+announcing which *source* a setting came from, a notice with nothing to do
+about it. This one reports a hazard the caller can still act on, in the window
+where acting is cheap, and it fires only when the flag actually overrides
+something.
 
 ## 4. CLI contract
 
@@ -450,6 +516,7 @@ vump self list            List published releases
 | `--through <step>`  | bump commands   | How far to carry the release: `none`, `commit`, `tag`, `push` |
 | `--tag-style <style>` | bump commands | How the tag object is written                  |
 | `--allow-nested`    | global          | Act on a configuration nested below another    |
+| `--any-branch`      | global          | Release from a branch the configuration does not list |
 | `--json`            | global          | Machine-readable output                        |
 
 Both replace the `[git]` setting of the same name for one run. There is no
@@ -552,8 +619,8 @@ src/
               Real filesystem, git via subprocess, terminal prompts,
               GitHub releases, and in-memory doubles for tests.
   app/        Use cases wiring ports together: Bump, Check, Status, Init,
-              Update, and locating configuration. The layer worth testing
-              hardest.
+              Update, the guided run, and locating configuration. The layer
+              worth testing hardest.
   cli/        clap definitions, adapter selection, output rendering.
 ```
 
@@ -569,6 +636,14 @@ Rules that keep the boundaries real:
   configuration does for itself. That is what lets discovery be exercised
   against an in-memory tree, and it keeps `config.rs` free of the I/O its own
   documentation says it has none of.
+- **The guided run is a use case, not a CLI detail.** It carries more
+  decisions than any other path and is the one most runs take, so it lives in
+  `app::guided` and reaches the terminal only through ports. Presentation does
+  not follow it down: the confirmation text and the name of each bump are
+  passed in as functions, so the use case decides what to ask and `cli` decides
+  how it reads. `Interaction::notice` exists for the same reason — a hazard
+  reported mid-run goes through the port rather than being printed from
+  underneath the abstraction.
 - A single `ChangeSet` value is the input to the human renderer, the JSON
   renderer, and `--dry-run` alike. Those three must not compute anything
   themselves. Bumping and setting differ only in how they reach a target
@@ -658,9 +733,13 @@ Three layers, each with a distinct job:
 
 1. **Domain unit tests.** Every transition in the §2 table, plus the refused
    ones. Pure functions, no fixtures, exhaustive.
-2. **Use-case tests** against in-memory port implementations. A fake VCS and a
-   fake filesystem let the whole bump flow be exercised — including git
-   side-effects and failure paths — without a real repository.
+2. **Use-case tests** against in-memory port implementations. A fake VCS, a
+   fake filesystem and a scripted `Interaction` let the whole bump flow be
+   exercised — including git side-effects, failure paths, and the guided run —
+   without a real repository or a terminal. `MemoryInteraction` answers from a
+   script and records every question, so what a run *asked* is assertable as
+   well as what it decided: a question the guided path should have answered for
+   itself is a defect a test can see.
 3. **End-to-end tests** driving the compiled binary against temporary
    directories, asserting on stdout, stderr, and exit codes. This layer owns
    the §4 interactivity contract and the §5 exit-code table: it is the only

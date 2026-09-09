@@ -13,12 +13,12 @@ use clap::{Parser, Subcommand};
 use thiserror::Error;
 
 use crate::adapters::{GitCli, GitHubReleases, RealFileSystem, TerminalInteraction};
-use crate::app::change::{ChangeError, GitPlanning, Nesting};
+use crate::app::change::{BranchCheck, ChangeError, GitPlanning, Nesting};
 use crate::app::update::Channel;
 use crate::app::{self, AppError};
 use crate::config::{Config, ConfigError, GitThrough, TagStyle};
 use crate::domain::{PreLabel, StableBump, Transition, TransitionError};
-use crate::ports::{FsError, Interaction, InteractionError};
+use crate::ports::{FsError, InteractionError};
 
 use exit::Exit;
 
@@ -57,6 +57,13 @@ pub struct Cli {
     /// writing through it.
     #[arg(long, global = true)]
     allow_nested: bool,
+
+    /// Release from a branch the configuration does not list.
+    ///
+    /// Global because the branches a release may come from is a property of
+    /// the repository, not of the command that reaches a tag.
+    #[arg(long, global = true)]
+    any_branch: bool,
 }
 
 /// The operation to perform.
@@ -354,6 +361,7 @@ struct Context {
     config: Config,
     json: bool,
     project: Option<String>,
+    branch: BranchCheck,
 }
 
 fn execute(cli: &Cli) -> Result<Exit, CliError> {
@@ -395,6 +403,11 @@ fn execute(cli: &Cli) -> Result<Exit, CliError> {
         config,
         json: cli.json,
         project: cli.project.clone(),
+        branch: if cli.any_branch {
+            BranchCheck::Skipped
+        } else {
+            BranchCheck::Enforce
+        },
     };
 
     let pre = |label, args: &PreReleaseArgs| Transition::PreRelease {
@@ -505,118 +518,43 @@ fn self_command(command: &SelfCommand, json: bool) -> Result<Exit, CliError> {
 
 /// Guides a bump, asking only what has not already been decided.
 ///
-/// Configuration is consulted first: a repository that declares its git
-/// settings is never asked about them again. That leaves two questions in the
-/// common case — which bump, and whether to proceed.
+/// The run itself lives in `app::guided`, driven entirely through ports. What
+/// remains here is what belongs to a terminal: which adapters to build, how a
+/// plan is worded, and what to print about the result.
 fn interactive(ctx: &Context) -> Result<Exit, CliError> {
     let ask = TerminalInteraction::new();
+    let vcs = GitCli::new(&ctx.root);
 
-    // Which project.
-    let project = match ctx.project.as_deref() {
-        Some(name) => ctx.config.select(Some(name))?.clone(),
-        None if ctx.config.projects.len() == 1 => ctx.config.projects[0].clone(),
-        None => {
-            let names: Vec<String> = ctx
-                .config
-                .projects
-                .iter()
-                .filter_map(|p| p.name.clone())
-                .collect();
-            let chosen = ask.choose_project(&names)?;
-            ctx.config.select(Some(&chosen))?.clone()
-        }
-    };
-
-    // What the current version is, resolving a disagreement if there is one.
-    let files = app::read_project_versions(&ctx.fs, &ctx.root, &project)?;
-    let base = resolve_base(&ask, &files)?;
-
-    // Which transition, offering only those that would succeed.
-    let offered = app::bump::valid_transitions_for(&base)?;
-    let labelled: Vec<(String, String)> = offered
-        .iter()
-        .map(|(t, next)| (describe_transition(*t), next.to_string()))
-        .collect();
-    let index = ask.choose_transition(&base.to_string(), &labelled)?;
-    let (transition, _) = offered
-        .get(index)
-        .ok_or(CliError::Interaction(InteractionError::Cancelled))?;
-
-    // How far to carry the release, asked only when configuration has not said.
-    let through = match ctx.config.git.through {
-        Some(through) => through,
-        None => ask.choose_git()?,
-    };
-
-    let tag_pattern = ctx.config.tag_pattern_for(&project)?;
-    let plan = app::bump::plan_from(
+    let guided = app::guided::run(
         &ctx.fs,
+        &vcs,
+        &ask,
         &ctx.root,
-        &project,
-        Some(base),
-        *transition,
-        GitPlanning {
-            through,
-            commit_message: &ctx.config.git.commit_message,
-            tag: &tag_pattern,
-            tag_style: ctx.config.git.tag_style,
-            tag_message: &ctx.config.git.tag_message,
+        &ctx.config,
+        app::guided::Guidance {
+            project: ctx.project.as_deref(),
+            branch: ctx.branch,
+            summary: render::summary,
+            label: describe_transition,
         },
     )?;
 
-    if !ask.confirm(&render::summary(&plan))? {
-        println!("Nothing was changed.");
-        return Ok(Exit::Success);
-    }
-
-    let vcs = GitCli::new(&ctx.root);
-    let outcome = app::change::apply(&ctx.fs, &vcs, &ctx.root, &plan.changes)?;
-    render::applied(&plan.changes, &outcome, ctx.json);
-
-    Ok(if outcome.push_error.is_some() {
-        Exit::Git
-    } else {
-        Exit::Success
-    })
-}
-
-/// Determines the version to bump from, asking only if the files disagree.
-fn resolve_base(
-    ask: &dyn Interaction,
-    files: &[app::FileVersion],
-) -> Result<semver::Version, CliError> {
-    let mut distinct: Vec<semver::Version> = Vec::new();
-    for file in files {
-        if !distinct.contains(&file.version) {
-            distinct.push(file.version.clone());
+    match guided {
+        app::guided::Guided::Declined => {
+            println!("Nothing was changed.");
+            Ok(Exit::Success)
         }
-    }
+        app::guided::Guided::Applied(applied) => {
+            let (plan, outcome) = (applied.plan, applied.outcome);
+            render::applied(&plan.changes, &outcome, ctx.json);
 
-    match distinct.as_slice() {
-        [only] => Ok(only.clone()),
-        [] => Err(CliError::Change(ChangeError::OutOfSync {
-            found: Vec::new(),
-        })),
-        _ => {
-            // Each candidate is shown with the files recording it, so the
-            // choice is made on evidence rather than on a bare version string.
-            let candidates: Vec<(String, String)> = distinct
-                .iter()
-                .map(|version| {
-                    let where_seen = files
-                        .iter()
-                        .filter(|f| f.version == *version)
-                        .map(|f| f.path.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    (version.to_string(), where_seen)
-                })
-                .collect();
-
-            let chosen = ask.choose_base(&candidates)?;
-            chosen
-                .parse()
-                .map_err(|_| CliError::Interaction(InteractionError::Cancelled))
+            // A failed push leaves real, recoverable work behind, so it is
+            // reported as a git failure rather than as a successful run.
+            Ok(if outcome.push_error.is_some() {
+                Exit::Git
+            } else {
+                Exit::Success
+            })
         }
     }
 }
@@ -658,12 +596,24 @@ fn bump(
         },
     )?;
 
+    // Before the dry run reports and before anything is written: a plan for a
+    // run that would be refused is not a plan.
+    let vcs = GitCli::new(&ctx.root);
+    if let Some(off) = app::change::check_branch(
+        &vcs,
+        &plan.changes.target,
+        plan.changes.git.touches_repository(),
+        &ctx.config.git,
+        ctx.branch,
+    )? {
+        render::off_branch(&off, ctx.branch);
+    }
+
     if dry_run {
         render::plan(&plan.changes, ctx.json);
         return Ok(Exit::Success);
     }
 
-    let vcs = GitCli::new(&ctx.root);
     let outcome = app::change::apply(&ctx.fs, &vcs, &ctx.root, &plan.changes)?;
     render::applied(&plan.changes, &outcome, ctx.json);
 
@@ -706,6 +656,17 @@ fn set(ctx: &Context, version: &str, dry_run: bool, git_args: &GitArgs) -> Resul
         },
     )?;
 
+    let vcs = GitCli::new(&ctx.root);
+    if let Some(off) = app::change::check_branch(
+        &vcs,
+        &changes.target,
+        changes.git.touches_repository(),
+        &ctx.config.git,
+        ctx.branch,
+    )? {
+        render::off_branch(&off, ctx.branch);
+    }
+
     if dry_run {
         render::plan(&changes, ctx.json);
         return Ok(Exit::Success);
@@ -719,7 +680,6 @@ fn set(ctx: &Context, version: &str, dry_run: bool, git_args: &GitArgs) -> Resul
         return Ok(Exit::Success);
     }
 
-    let vcs = GitCli::new(&ctx.root);
     let outcome = app::change::apply(&ctx.fs, &vcs, &ctx.root, &changes)?;
     render::applied(&changes, &outcome, ctx.json);
 
@@ -804,6 +764,21 @@ fn status(ctx: &Context) -> Result<Exit, CliError> {
             Exit::OutOfSync
         },
     )
+}
+
+impl From<app::guided::GuidedError> for CliError {
+    /// Unwraps rather than nesting, so a guided failure exits with the same
+    /// code the same failure would exit with from a subcommand.
+    fn from(error: app::guided::GuidedError) -> Self {
+        use app::guided::GuidedError as Guided;
+        match error {
+            Guided::Config(e) => Self::Config(e),
+            Guided::App(e) => Self::App(e),
+            Guided::Change(e) => Self::Change(e),
+            Guided::Transition(e) => Self::Transition(e),
+            Guided::Interaction(e) => Self::Interaction(e),
+        }
+    }
 }
 
 /// Maps a use-case failure to its documented exit code.
@@ -906,7 +881,9 @@ impl CliError {
                 ChangeError::Transition(_) => Exit::InvalidTransition,
                 ChangeError::OutOfSync { .. } => Exit::OutOfSync,
                 ChangeError::DirtyTree { .. } => Exit::DirtyTree,
-                ChangeError::NestedConfig { .. } => Exit::Config,
+                ChangeError::NestedConfig { .. }
+                | ChangeError::OffBranch { .. }
+                | ChangeError::DetachedHead => Exit::Config,
                 ChangeError::Vcs(_) => Exit::Git,
             },
         }

@@ -7,6 +7,7 @@
 pub mod bump;
 pub mod change;
 pub mod check;
+pub mod guided;
 pub mod init;
 pub mod set;
 pub mod status;

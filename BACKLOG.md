@@ -151,6 +151,30 @@ The reason not to rush: a crate inside this repository's tree is not inert the
 way an npm or C# project is. It would need excluding from the workspace, and a
 mistake there breaks `cargo build` for the tool itself.
 
+### Branch patterns in the release-branch lists
+
+`release_branches` and `prerelease_branches` match exact names. A repository
+maintaining several release lines — `release/1.x`, `release/2.x` — has to list
+each one and extend the list whenever a line opens. A single `*` would cover it.
+
+Left out of the first version because exact names cover `main`, `master` and
+`release`, which is what nearly every repository needs, and a pattern language
+is far easier to add than to narrow once written. semantic-release supports
+globs and regex in the same position; the regex half is the part worth not
+copying.
+
+### Per-identifier release branches
+
+Splitting branch policy three ways — `rc` from `release/*`, `beta` from
+`develop`, `alpha` from anywhere — rather than once, at stable versus
+pre-release.
+
+Considered while designing the two keys and left out. It triples the
+configuration surface to express a policy that is rare even in GitFlow shops,
+and the split that exists already covers the three arrangements people actually
+hold: stable locked with pre-releases free, both locked, and pre-releases locked
+alone. Worth reopening if someone names a repository that needs the third axis.
+
 ### Inputs on the check action
 
 The composite action takes `version`, `config` and `vump-version`. Passing a
@@ -192,6 +216,55 @@ Whether a project also needs to *override* the whole message, as it can with
 need not be.
 
 ---
+
+### Deciding the bump from commit messages
+
+semantic-release and release-please read Conventional Commits — `feat:`, `fix:`,
+`BREAKING CHANGE:` — to work out whether a release is a patch, a minor or a
+major, so nobody names the number. It is the most widespread thing in release
+tooling that vump does not do, and its absence here is currently an omission
+rather than a decision.
+
+What it would give: a release that needs no judgement at the moment it happens,
+which is what makes a fully automated release from CI possible at all.
+
+What it costs: the number becomes a function of commit discipline. A `fix:` that
+was really a breaking change ships as a patch, and nothing downstream catches
+it — a confident wrong answer, which is the exact failure `vump check` exists to
+prevent in the adjacent case. It is also all-or-nothing per repository, since
+one unconventional commit silently drops out of the calculation.
+
+If it is built, it should propose rather than decide: compute the bump, then
+require it to be confirmed or overridden, so the number stays a decision while
+the work of reaching it goes away. That also keeps the interactive run and the
+subcommands telling the same story.
+
+What would settle it: whether anyone wants to release a vump-managed project
+from CI with no human in the loop. Nobody has asked yet.
+
+### Generating a changelog
+
+standard-version, release-please, changesets and semantic-release all write
+`CHANGELOG.md` as part of the release. vump does not, and it is the most likely
+thing to be asked for.
+
+The argument for: the changelog describes exactly the version being tagged, so
+it belongs in the same commit. Written separately it drifts from the tag it
+describes, which is the same class of defect vump exists to catch.
+
+The argument against: it needs a source for the entries, and every source is a
+commitment vump has so far avoided. Commit messages require Conventional
+Commits, and so inherit that entry's problem. Hand-written fragments require
+changesets' whole parallel workflow. Pull request titles require a forge API,
+which drags vump into knowing about GitHub for something that is not
+verification.
+
+Note that this is not excluded by the non-goals: a changelog is neither deciding
+when to release nor orchestrating anything after the tag. It sits inside the
+window vump already owns, which is why the question is open rather than closed.
+
+What would settle it: finding a source of entries that needs no new workflow
+and no forge.
 
 ## Decided against
 
