@@ -1,0 +1,17 @@
+# An executable and the library it ships with, versioned together as one.
+#
+# Neither .csproj declares a <Version>. Both inherit the one in
+# Directory.Build.props, which is the file vump tracks — one entry for the
+# whole solution rather than one per project. A project that declared its own
+# <Version> would override it, because MSBuild imports the props file before
+# the project body.
+#
+# Git is off throughout the sandbox, and the tag pattern cannot be mistaken
+# for vump's own — see ../../npm/single-project/vump.toml.
+
+files = ["Directory.Build.props"]
+
+[git]
+through = "none"
+tag_pattern = "sandbox-cs-shared-v{new_version}"
+commit_message = "chore(sandbox): bump cs/shared-version to {new_version}"

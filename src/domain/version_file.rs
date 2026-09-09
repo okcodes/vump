@@ -65,9 +65,13 @@ impl Tracked {
         match file_name {
             "package.json" => Some(Self::Manifest(Format::PackageJson)),
             "Cargo.toml" => Some(Self::Manifest(Format::CargoToml)),
-            // Authored and committed like any project file, not generated: it
-            // is where a solution keeps one version for the projects beneath.
-            "Directory.Build.props" => Some(Self::Manifest(Format::MsBuild)),
+            // Authored and committed like any project file, neither generated:
+            // where a solution keeps one version for the projects beneath it.
+            // The pair differ in when MSBuild imports them, not in what they
+            // hold, so the same element is read from both.
+            "Directory.Build.props" | "Directory.Build.targets" => {
+                Some(Self::Manifest(Format::MsBuild))
+            }
             "VERSION" => Some(Self::Manifest(Format::PlainText)),
             // The only names recognized by extension rather than in full: an
             // MSBuild project is named after the assembly it builds.
@@ -101,7 +105,8 @@ pub enum VersionFileError {
     /// The filename is not one vump recognizes.
     #[error(
         "unsupported file {name:?}; expected package.json, package-lock.json, Cargo.toml, \
-         Cargo.lock, VERSION, Directory.Build.props, or a .csproj, .fsproj or .vbproj project"
+         Cargo.lock, VERSION, Directory.Build.props, Directory.Build.targets, or a \
+         .csproj, .fsproj or .vbproj project"
     )]
     UnsupportedFile {
         /// The filename that could not be classified.
@@ -900,6 +905,7 @@ mod tests {
             "package-lock.json",
             "Cargo.toml",
             "Directory.Build.props",
+            "Directory.Build.targets",
             "Cargo.lock",
             "VERSION",
             ".csproj",
@@ -927,7 +933,12 @@ mod tests {
             manifest("Directory.Build.props"),
             Some(Tracked::Manifest(Format::MsBuild))
         );
+        assert_eq!(
+            manifest("Directory.Build.targets"),
+            Some(Tracked::Manifest(Format::MsBuild))
+        );
         assert_eq!(manifest("Other.props"), None);
+        assert_eq!(manifest("Other.targets"), None);
         assert_eq!(
             manifest("VERSION"),
             Some(Tracked::Manifest(Format::PlainText))

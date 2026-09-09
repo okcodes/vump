@@ -15,6 +15,7 @@ This is not test coverage. The suite in `tests/` and the fixtures in
 | [`npm/multi-project`](npm/multi-project) | Two packages released independently, with per-project tags |
 | [`cs/single-project`](cs/single-project) | `<Version>` in a `.csproj`, and what stays put around it |
 | [`cs/multi-project`](cs/multi-project) | Two C# projects versioned independently |
+| [`cs/shared-version`](cs/shared-version) | An executable and its library on one `Directory.Build.props` |
 
 ## Git is off, deliberately
 
@@ -78,6 +79,15 @@ For C#, the version reaches the assembly:
 cd sandbox/cs/single-project
 vump alpha --toward minor --allow-nested
 dotnet run --project Demo            # Demo 1.1.0-alpha.0
+```
+
+One `Directory.Build.props` can carry the version for a whole solution. Neither
+project below declares its own, so both inherit it and report the same number:
+
+```bash
+cd sandbox/cs/shared-version
+vump minor --allow-nested            # rewrites one file, not two
+dotnet run --project App             # App 1.1.0 / Lib 1.1.0
 ```
 
 ## Putting it back

@@ -86,7 +86,7 @@ builds. The three extensions are one language each and one format.
 | ------------------- | ---------- | --------------------------------------- |
 | `package.json`      | JSON       | `.version`                              |
 | `*.csproj`, `*.fsproj`, `*.vbproj` | XML | `<Project><PropertyGroup><Version>` |
-| `Directory.Build.props` | XML | `<Project><PropertyGroup><Version>` |
+| `Directory.Build.props`, `Directory.Build.targets` | XML | `<Project><PropertyGroup><Version>` |
 | `package-lock.json` | JSON       | `.version`, and `.packages[""].version` |
 | `Cargo.toml`        | TOML       | `[package].version`                     |
 | `Cargo.lock`        | TOML       | the sole `[[package]]` with no `source` |
@@ -108,14 +108,13 @@ take four numeric parts and cannot hold a pre-release at all. Several
 governs is MSBuild's answer to give and the file is refused rather than guessed
 at.
 
-`Directory.Build.props` holds one version for the projects beneath it. It is
-authored and committed like a project file — no build writes one. MSBuild
-imports it *before* the project body, so a project declaring its own
-`<Version>` overrides it, and the search stops at the nearest one rather than
-merging several. Track whichever of the two holds the value; vump does not
-police which one MSBuild will use. `Directory.Build.targets`, imported *after*
-the project, overrides every project — that is what it is for, and a version
-does not belong in it.
+`Directory.Build.props` and `Directory.Build.targets` hold settings shared by
+every project beneath them. Both are authored and committed like a project
+file, and neither is legacy. They differ in when MSBuild imports them: props
+*before* the project body, so a project's own `<Version>` overrides it; targets
+*after*, so it overrides every project. Either may be tracked, and the search
+stops at the nearest one rather than merging. `Directory.Solution.props` is not
+a version file — a `<Version>` there never reaches the projects.
 
 A built assembly reports slightly more than vump wrote: inside a git repository
 the SDK appends the current commit to the informational version
