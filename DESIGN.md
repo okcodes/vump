@@ -86,6 +86,7 @@ builds. The three extensions are one language each and one format.
 | ------------------- | ---------- | --------------------------------------- |
 | `package.json`      | JSON       | `.version`                              |
 | `*.csproj`, `*.fsproj`, `*.vbproj` | XML | `<Project><PropertyGroup><Version>` |
+| `Directory.Build.props` | XML | `<Project><PropertyGroup><Version>` |
 | `package-lock.json` | JSON       | `.version`, and `.packages[""].version` |
 | `Cargo.toml`        | TOML       | `[package].version`                     |
 | `Cargo.lock`        | TOML       | the sole `[[package]]` with no `source` |
@@ -106,6 +107,20 @@ take four numeric parts and cannot hold a pre-release at all. Several
 `<Version>` properties in conditional groups are alternatives, so which one
 governs is MSBuild's answer to give and the file is refused rather than guessed
 at.
+
+`Directory.Build.props` holds one version for the projects beneath it. It is
+authored and committed like a project file — no build writes one. MSBuild
+imports it *before* the project body, so a project declaring its own
+`<Version>` overrides it, and the search stops at the nearest one rather than
+merging several. Track whichever of the two holds the value; vump does not
+police which one MSBuild will use. `Directory.Build.targets`, imported *after*
+the project, overrides every project — that is what it is for, and a version
+does not belong in it.
+
+A built assembly reports slightly more than vump wrote: inside a git repository
+the SDK appends the current commit to the informational version
+(`1.0.0+e559804…`), no SourceLink involved. That is semver build metadata added
+after vump's job, and `check` compares tags to `<Version>`.
 
 Support for arbitrary formats via a declarative extraction spec (a path or
 pattern per file entry) is a plausible future direction, but the built-in

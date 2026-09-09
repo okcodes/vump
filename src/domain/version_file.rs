@@ -65,6 +65,9 @@ impl Tracked {
         match file_name {
             "package.json" => Some(Self::Manifest(Format::PackageJson)),
             "Cargo.toml" => Some(Self::Manifest(Format::CargoToml)),
+            // Authored and committed like any project file, not generated: it
+            // is where a solution keeps one version for the projects beneath.
+            "Directory.Build.props" => Some(Self::Manifest(Format::MsBuild)),
             "VERSION" => Some(Self::Manifest(Format::PlainText)),
             // The only names recognized by extension rather than in full: an
             // MSBuild project is named after the assembly it builds.
@@ -98,7 +101,7 @@ pub enum VersionFileError {
     /// The filename is not one vump recognizes.
     #[error(
         "unsupported file {name:?}; expected package.json, package-lock.json, Cargo.toml, \
-         Cargo.lock, VERSION, or a .csproj, .fsproj or .vbproj project"
+         Cargo.lock, VERSION, Directory.Build.props, or a .csproj, .fsproj or .vbproj project"
     )]
     UnsupportedFile {
         /// The filename that could not be classified.
@@ -896,6 +899,7 @@ mod tests {
             "package.json",
             "package-lock.json",
             "Cargo.toml",
+            "Directory.Build.props",
             "Cargo.lock",
             "VERSION",
             ".csproj",
@@ -917,6 +921,13 @@ mod tests {
             manifest("Cargo.toml"),
             Some(Tracked::Manifest(Format::CargoToml))
         );
+        // Recognized in full, not by extension: a .props file is only a
+        // version file under this one name, which is the one MSBuild imports.
+        assert_eq!(
+            manifest("Directory.Build.props"),
+            Some(Tracked::Manifest(Format::MsBuild))
+        );
+        assert_eq!(manifest("Other.props"), None);
         assert_eq!(
             manifest("VERSION"),
             Some(Tracked::Manifest(Format::PlainText))
