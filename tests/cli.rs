@@ -270,14 +270,14 @@ fn an_impossible_transition_exits_seven() {
 }
 
 #[test]
-fn starting_a_pre_release_without_a_base_exits_seven() {
+fn starting_a_pre_release_without_toward_exits_seven() {
     let fx = Fixture::new()
         .write("vump.toml", SINGLE)
         .write("VERSION", "1.2.3\n");
 
     let run = fx.run(&["alpha", "--through", "none"]);
     assert_eq!(run.code, 7, "{}", run.output());
-    assert!(run.stderr.contains("--from"), "{}", run.stderr);
+    assert!(run.stderr.contains("--toward"), "{}", run.stderr);
 }
 
 // ─── The non-interactive contract ────────────────────────────────────────────
@@ -358,7 +358,7 @@ fn a_pre_release_sequence_advances_and_finalizes() {
         .write("VERSION", "1.2.3\n");
 
     assert_eq!(
-        fx.run(&["alpha", "--from", "minor", "--through", "none"])
+        fx.run(&["alpha", "--toward", "minor", "--through", "none"])
             .code,
         0
     );
@@ -1424,7 +1424,7 @@ fn a_csproj_moves_in_step_with_other_tracked_files() {
         .write("Demo.csproj", CSPROJ);
 
     assert_eq!(
-        fx.run(&["alpha", "--from", "patch", "--through", "none"])
+        fx.run(&["alpha", "--toward", "patch", "--through", "none"])
             .code,
         0
     );
@@ -1620,7 +1620,7 @@ fn a_pre_release_is_not_governed_by_the_stable_list() {
     // with the stable list would mean merging first, every time.
     let fx = off_release_branch();
 
-    let run = fx.run(&["alpha", "--from", "patch", "--through", "tag"]);
+    let run = fx.run(&["alpha", "--toward", "patch", "--through", "tag"]);
     assert_eq!(run.code, 0, "{}", run.output());
     assert_eq!(fx.tags(), ["v1.2.4-alpha.0"]);
 }
@@ -1636,7 +1636,7 @@ fn a_pre_release_can_be_constrained_on_its_own() {
         .with_git();
     fx.branch("feat/x");
 
-    let run = fx.run(&["alpha", "--from", "patch", "--through", "tag"]);
+    let run = fx.run(&["alpha", "--toward", "patch", "--through", "tag"]);
     assert_eq!(run.code, 3, "{}", run.output());
     assert!(run.stderr.contains("develop"), "{}", run.stderr);
 

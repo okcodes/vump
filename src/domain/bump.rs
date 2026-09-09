@@ -89,14 +89,14 @@ pub enum Transition {
     Stable(StableBump),
     /// Start or advance a pre-release.
     ///
-    /// `from` is required when the current version is stable, because starting
-    /// a pre-release means choosing which future stable version it precedes.
-    /// It is ignored when already on a pre-release.
+    /// `toward` is required when the current version is stable, because
+    /// starting a pre-release means choosing which future stable version it
+    /// precedes. It is ignored when already on a pre-release.
     PreRelease {
         /// Channel to move to.
         label: PreLabel,
-        /// Stable bump the new pre-release is based on.
-        from: Option<StableBump>,
+        /// Stable bump naming the release this pre-release leads to.
+        toward: Option<StableBump>,
     },
     /// Drop the pre-release suffix, finalizing the version.
     Release,
@@ -131,9 +131,9 @@ pub enum TransitionError {
     /// stable version it precedes.
     #[error(
         "{current} is stable, so `{label}` needs to know which release it leads to; \
-         pass --from patch, --from minor, or --from major"
+         pass --toward patch, --toward minor, or --toward major"
     )]
-    MissingFrom {
+    MissingToward {
         /// The version the transition was attempted from.
         current: Version,
         /// The requested pre-release channel.
@@ -188,14 +188,14 @@ pub fn apply(current: &Version, transition: Transition) -> Result<Version, Trans
             })
         }
 
-        (Transition::PreRelease { label, from }, PreState::Stable) => {
-            let Some(from) = from else {
-                return Err(TransitionError::MissingFrom {
+        (Transition::PreRelease { label, toward }, PreState::Stable) => {
+            let Some(toward) = toward else {
+                return Err(TransitionError::MissingToward {
                     current: current.clone(),
                     label,
                 });
             };
-            Ok(with_pre(&bump_stable(current, from), label, 0))
+            Ok(with_pre(&bump_stable(current, toward), label, 0))
         }
 
         (
@@ -255,14 +255,17 @@ pub fn valid_transitions(current: &Version) -> Result<Vec<(Transition, Version)>
                 for bump in [StableBump::Patch, StableBump::Minor, StableBump::Major] {
                     candidates.push(Transition::PreRelease {
                         label,
-                        from: Some(bump),
+                        toward: Some(bump),
                     });
                 }
             }
         }
         PreState::Pre { .. } => {
             for label in [PreLabel::Alpha, PreLabel::Beta, PreLabel::Rc] {
-                candidates.push(Transition::PreRelease { label, from: None });
+                candidates.push(Transition::PreRelease {
+                    label,
+                    toward: None,
+                });
             }
             candidates.push(Transition::Release);
         }
@@ -361,7 +364,7 @@ mod tests {
                 "1.2.3",
                 Transition::PreRelease {
                     label: PreLabel::Alpha,
-                    from: Some(StableBump::Patch),
+                    toward: Some(StableBump::Patch),
                 },
                 "1.2.4-alpha.0",
             ),
@@ -369,7 +372,7 @@ mod tests {
                 "1.2.3",
                 Transition::PreRelease {
                     label: PreLabel::Alpha,
-                    from: Some(StableBump::Minor),
+                    toward: Some(StableBump::Minor),
                 },
                 "1.3.0-alpha.0",
             ),
@@ -377,7 +380,7 @@ mod tests {
                 "1.2.3",
                 Transition::PreRelease {
                     label: PreLabel::Rc,
-                    from: Some(StableBump::Major),
+                    toward: Some(StableBump::Major),
                 },
                 "2.0.0-rc.0",
             ),
@@ -385,7 +388,7 @@ mod tests {
                 "1.2.3-alpha.0",
                 Transition::PreRelease {
                     label: PreLabel::Alpha,
-                    from: None,
+                    toward: None,
                 },
                 "1.2.3-alpha.1",
             ),
@@ -393,7 +396,7 @@ mod tests {
                 "1.2.3-alpha.2",
                 Transition::PreRelease {
                     label: PreLabel::Beta,
-                    from: None,
+                    toward: None,
                 },
                 "1.2.3-beta.0",
             ),
@@ -401,7 +404,7 @@ mod tests {
                 "1.2.3-beta.1",
                 Transition::PreRelease {
                     label: PreLabel::Rc,
-                    from: None,
+                    toward: None,
                 },
                 "1.2.3-rc.0",
             ),
@@ -409,7 +412,7 @@ mod tests {
                 "1.2.3-alpha.5",
                 Transition::PreRelease {
                     label: PreLabel::Rc,
-                    from: None,
+                    toward: None,
                 },
                 "1.2.3-rc.0",
             ),
@@ -449,11 +452,11 @@ mod tests {
             &v("1.2.3"),
             Transition::PreRelease {
                 label: PreLabel::Beta,
-                from: None,
+                toward: None,
             },
         )
         .unwrap_err();
-        assert!(matches!(err, TransitionError::MissingFrom { .. }));
+        assert!(matches!(err, TransitionError::MissingToward { .. }));
     }
 
     #[test]
@@ -464,7 +467,14 @@ mod tests {
             ("1.2.3-rc.3", PreLabel::Beta),
         ];
         for (current, label) in cases {
-            let err = apply(&v(current), Transition::PreRelease { label, from: None }).unwrap_err();
+            let err = apply(
+                &v(current),
+                Transition::PreRelease {
+                    label,
+                    toward: None,
+                },
+            )
+            .unwrap_err();
             assert!(
                 matches!(err, TransitionError::BackwardsPreRelease { .. }),
                 "{current} -> {label} should be refused, got {err:?}"
@@ -475,12 +485,12 @@ mod tests {
     #[test]
     fn from_is_ignored_when_already_on_a_pre_release() {
         // The current pre-release already fixes the numeric components; a
-        // stale --from must not silently re-bump them.
+        // a stale --toward must not silently re-bump them.
         let result = apply(
             &v("1.2.3-alpha.0"),
             Transition::PreRelease {
                 label: PreLabel::Beta,
-                from: Some(StableBump::Major),
+                toward: Some(StableBump::Major),
             },
         )
         .expect("advancing a pre-release should succeed");
@@ -493,7 +503,7 @@ mod tests {
             &v("1.2.3-beta"),
             Transition::PreRelease {
                 label: PreLabel::Beta,
-                from: None,
+                toward: None,
             },
         )
         .expect("advancing a counterless pre-release should succeed");
