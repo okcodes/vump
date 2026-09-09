@@ -130,6 +130,13 @@ pub trait Interaction {
     /// declined.
     fn choose_git(&self) -> Result<GitThrough, InteractionError>;
 
+    /// Reports something the person should see before the next question.
+    ///
+    /// Not a result and not a failure: a hazard that changes what the questions
+    /// after it mean. It goes through the port rather than being printed
+    /// directly so that a run driven from memory can see it too.
+    fn notice(&self, message: &str);
+
     /// Asks for final approval of a rendered summary.
     ///
     /// # Errors

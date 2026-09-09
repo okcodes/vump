@@ -168,6 +168,10 @@ impl Interaction for TerminalInteraction {
         })
     }
 
+    fn notice(&self, message: &str) {
+        eprintln!("{message}");
+    }
+
     fn confirm(&self, summary: &str) -> Result<bool, InteractionError> {
         Self::require_terminal()?;
         println!("{summary}");
@@ -215,6 +219,8 @@ impl Interaction for NoInteraction {
     fn choose_git(&self) -> Result<GitThrough, InteractionError> {
         Self::refuse()
     }
+
+    fn notice(&self, _: &str) {}
 
     fn confirm(&self, _: &str) -> Result<bool, InteractionError> {
         Self::refuse()

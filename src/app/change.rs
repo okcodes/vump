@@ -172,6 +172,33 @@ pub struct OffBranch {
     pub stable: bool,
 }
 
+impl OffBranch {
+    /// How this reads when it has to be reported rather than raised.
+    ///
+    /// The wording lives here so the guided menu, the warning a waived run
+    /// prints, and the refusal itself cannot describe the same situation three
+    /// different ways.
+    #[must_use]
+    pub fn describe(&self, check: BranchCheck) -> String {
+        let key = if self.stable {
+            "release_branches"
+        } else {
+            "prerelease_branches"
+        };
+        let where_it_is = match &self.branch {
+            Some(branch) => format!("{branch} is not listed in {key}"),
+            None => format!("HEAD is detached, and {key} is set"),
+        };
+        let way_out = match check {
+            BranchCheck::Skipped => "--any-branch was passed, so this proceeds anyway",
+            BranchCheck::Enforce => {
+                "releases it governs are unavailable here, and --any-branch allows them"
+            }
+        };
+        format!("warning: {where_it_is}; {way_out}.")
+    }
+}
+
 /// Whether a configuration is acted on from below another.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Nesting {

@@ -18,7 +18,7 @@ use crate::app::update::Channel;
 use crate::app::{self, AppError};
 use crate::config::{Config, ConfigError, GitThrough, TagStyle};
 use crate::domain::{PreLabel, StableBump, Transition, TransitionError};
-use crate::ports::{Availability, FsError, Interaction, InteractionError, TransitionChoice};
+use crate::ports::{FsError, InteractionError};
 
 use exit::Exit;
 
@@ -518,163 +518,43 @@ fn self_command(command: &SelfCommand, json: bool) -> Result<Exit, CliError> {
 
 /// Guides a bump, asking only what has not already been decided.
 ///
-/// Configuration is consulted first: a repository that declares its git
-/// settings is never asked about them again. That leaves two questions in the
-/// common case — which bump, and whether to proceed.
+/// The run itself lives in `app::guided`, driven entirely through ports. What
+/// remains here is what belongs to a terminal: which adapters to build, how a
+/// plan is worded, and what to print about the result.
 fn interactive(ctx: &Context) -> Result<Exit, CliError> {
     let ask = TerminalInteraction::new();
-
-    // Which project.
-    let project = match ctx.project.as_deref() {
-        Some(name) => ctx.config.select(Some(name))?.clone(),
-        None if ctx.config.projects.len() == 1 => ctx.config.projects[0].clone(),
-        None => {
-            let names: Vec<String> = ctx
-                .config
-                .projects
-                .iter()
-                .filter_map(|p| p.name.clone())
-                .collect();
-            let chosen = ask.choose_project(&names)?;
-            ctx.config.select(Some(&chosen))?.clone()
-        }
-    };
-
-    // What the current version is, resolving a disagreement if there is one.
-    let files = app::read_project_versions(&ctx.fs, &ctx.root, &project)?;
-    let base = resolve_base(&ask, &files)?;
-
-    // Which transition, offering only those that would succeed.
-    let offered = app::bump::valid_transitions_for(&base)?;
-
-    // What the branch policy makes of each bump, settled before the question is
-    // asked. A run that would be refused must not collect answers first, and a
-    // bump that is unavailable should say so in the list rather than be
-    // discovered afterwards.
-    //
-    // With `through` unset the run counts as reaching git, because that is what
-    // it does unless the next question says otherwise.
     let vcs = GitCli::new(&ctx.root);
-    let reaches_commit = ctx.config.git.through.is_none_or(GitThrough::commits);
-    let targets: Vec<semver::Version> = offered.iter().map(|(_, next)| next.clone()).collect();
-    let availability =
-        app::change::offer(&vcs, &targets, reaches_commit, &ctx.config.git, ctx.branch)?;
 
-    // Whichever bump the policy has something to say about explains it for all
-    // of them: the branch and the list are the same either way.
-    if let Some(qualified) = availability.iter().position(|a| *a != Availability::Free) {
-        if let Some(off) = app::change::check_branch(
-            &vcs,
-            &targets[qualified],
-            reaches_commit,
-            &ctx.config.git,
-            BranchCheck::Skipped,
-        )? {
-            render::off_branch(&off, ctx.branch);
-        }
-    }
-
-    // Nothing selectable is a refusal, not a menu. Raised through the same
-    // check so the wording is the one every other refusal uses.
-    if availability.iter().all(|a| *a == Availability::Blocked) {
-        app::change::check_branch(
-            &vcs,
-            &targets[0],
-            reaches_commit,
-            &ctx.config.git,
-            BranchCheck::Enforce,
-        )?;
-    }
-
-    let choices: Vec<TransitionChoice> = offered
-        .iter()
-        .zip(&availability)
-        .map(|((transition, next), availability)| TransitionChoice {
-            label: describe_transition(*transition),
-            result: next.to_string(),
-            availability: *availability,
-        })
-        .collect();
-
-    let index = ask.choose_transition(&base.to_string(), &choices)?;
-    let (transition, _) = offered
-        .get(index)
-        .ok_or(CliError::Interaction(InteractionError::Cancelled))?;
-
-    // How far to carry the release, asked only when configuration has not said.
-    let through = match ctx.config.git.through {
-        Some(through) => through,
-        None => ask.choose_git()?,
-    };
-
-    let tag_pattern = ctx.config.tag_pattern_for(&project)?;
-    let plan = app::bump::plan_from(
+    let guided = app::guided::run(
         &ctx.fs,
+        &vcs,
+        &ask,
         &ctx.root,
-        &project,
-        Some(base),
-        *transition,
-        GitPlanning {
-            through,
-            commit_message: &ctx.config.git.commit_message,
-            tag: &tag_pattern,
-            tag_style: ctx.config.git.tag_style,
-            tag_message: &ctx.config.git.tag_message,
+        &ctx.config,
+        app::guided::Guidance {
+            project: ctx.project.as_deref(),
+            branch: ctx.branch,
+            summary: render::summary,
+            label: describe_transition,
         },
     )?;
 
-    if !ask.confirm(&render::summary(&plan))? {
-        println!("Nothing was changed.");
-        return Ok(Exit::Success);
-    }
-
-    let outcome = app::change::apply(&ctx.fs, &vcs, &ctx.root, &plan.changes)?;
-    render::applied(&plan.changes, &outcome, ctx.json);
-
-    Ok(if outcome.push_error.is_some() {
-        Exit::Git
-    } else {
-        Exit::Success
-    })
-}
-
-/// Determines the version to bump from, asking only if the files disagree.
-fn resolve_base(
-    ask: &dyn Interaction,
-    files: &[app::FileVersion],
-) -> Result<semver::Version, CliError> {
-    let mut distinct: Vec<semver::Version> = Vec::new();
-    for file in files {
-        if !distinct.contains(&file.version) {
-            distinct.push(file.version.clone());
+    match guided {
+        app::guided::Guided::Declined => {
+            println!("Nothing was changed.");
+            Ok(Exit::Success)
         }
-    }
+        app::guided::Guided::Applied(applied) => {
+            let (plan, outcome) = (applied.plan, applied.outcome);
+            render::applied(&plan.changes, &outcome, ctx.json);
 
-    match distinct.as_slice() {
-        [only] => Ok(only.clone()),
-        [] => Err(CliError::Change(ChangeError::OutOfSync {
-            found: Vec::new(),
-        })),
-        _ => {
-            // Each candidate is shown with the files recording it, so the
-            // choice is made on evidence rather than on a bare version string.
-            let candidates: Vec<(String, String)> = distinct
-                .iter()
-                .map(|version| {
-                    let where_seen = files
-                        .iter()
-                        .filter(|f| f.version == *version)
-                        .map(|f| f.path.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    (version.to_string(), where_seen)
-                })
-                .collect();
-
-            let chosen = ask.choose_base(&candidates)?;
-            chosen
-                .parse()
-                .map_err(|_| CliError::Interaction(InteractionError::Cancelled))
+            // A failed push leaves real, recoverable work behind, so it is
+            // reported as a git failure rather than as a successful run.
+            Ok(if outcome.push_error.is_some() {
+                Exit::Git
+            } else {
+                Exit::Success
+            })
         }
     }
 }
@@ -884,6 +764,21 @@ fn status(ctx: &Context) -> Result<Exit, CliError> {
             Exit::OutOfSync
         },
     )
+}
+
+impl From<app::guided::GuidedError> for CliError {
+    /// Unwraps rather than nesting, so a guided failure exits with the same
+    /// code the same failure would exit with from a subcommand.
+    fn from(error: app::guided::GuidedError) -> Self {
+        use app::guided::GuidedError as Guided;
+        match error {
+            Guided::Config(e) => Self::Config(e),
+            Guided::App(e) => Self::App(e),
+            Guided::Change(e) => Self::Change(e),
+            Guided::Transition(e) => Self::Transition(e),
+            Guided::Interaction(e) => Self::Interaction(e),
+        }
+    }
 }
 
 /// Maps a use-case failure to its documented exit code.
