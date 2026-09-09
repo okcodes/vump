@@ -228,7 +228,7 @@ struct PreReleaseArgs {
     /// Required when the current version is stable, because a pre-release must
     /// know which future release it precedes. Ignored when already on one.
     #[arg(long, value_name = "BUMP")]
-    from: Option<StableBumpArg>,
+    toward: Option<StableBumpArg>,
 
     /// Report what would change without writing anything.
     #[arg(long)]
@@ -412,7 +412,7 @@ fn execute(cli: &Cli) -> Result<Exit, CliError> {
 
     let pre = |label, args: &PreReleaseArgs| Transition::PreRelease {
         label,
-        from: args.from.map(Into::into),
+        toward: args.toward.map(Into::into),
     };
 
     let Some(command) = &cli.command else {
@@ -566,9 +566,12 @@ fn describe_transition(transition: Transition) -> String {
         Transition::Stable(bump) => bump.to_string(),
         Transition::PreRelease {
             label,
-            from: Some(base),
-        } => format!("{label} --from {base}"),
-        Transition::PreRelease { label, from: None } => label.to_string(),
+            toward: Some(bump),
+        } => format!("{label} --toward {bump}"),
+        Transition::PreRelease {
+            label,
+            toward: None,
+        } => label.to_string(),
         Transition::Release => "release".to_owned(),
     }
 }
@@ -934,9 +937,28 @@ mod tests {
     }
 
     #[test]
-    fn from_only_accepts_stable_bumps() {
-        assert!(Cli::try_parse_from(["vump", "alpha", "--from", "minor"]).is_ok());
-        assert!(Cli::try_parse_from(["vump", "alpha", "--from", "beta"]).is_err());
+    fn toward_only_accepts_stable_bumps() {
+        assert!(Cli::try_parse_from(["vump", "alpha", "--toward", "minor"]).is_ok());
+        assert!(Cli::try_parse_from(["vump", "alpha", "--toward", "beta"]).is_err());
+    }
+
+    #[test]
+    fn every_menu_label_is_a_command_that_parses() {
+        // The menu's labels are the non-interactive equivalents, so a label
+        // that does not parse teaches an invocation that does not exist. That
+        // is invisible to every other test: the guided path never runs them.
+        for current in ["1.2.3", "1.2.3-alpha.0", "1.2.3-beta.1", "1.2.3-rc.2"] {
+            let version = current.parse().expect("a fixture version parses");
+            for (transition, _) in
+                crate::domain::bump::valid_transitions(&version).expect("the fixture is offerable")
+            {
+                let label = describe_transition(transition);
+                let argv = std::iter::once("vump").chain(label.split_whitespace());
+                Cli::try_parse_from(argv).unwrap_or_else(|e| {
+                    panic!("menu offers {label:?} from {current}, which does not parse: {e}")
+                });
+            }
+        }
     }
 
     #[test]

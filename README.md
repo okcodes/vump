@@ -59,7 +59,7 @@ needs, or it fails saying what is missing.
 | Flag | Description |
 | --- | --- |
 | `--dry-run` | Report what would change, write nothing |
-| `--from <patch\|minor\|major>` | Which release a new pre-release leads to |
+| `--toward <patch\|minor\|major>` | Which release a new pre-release leads to |
 | `--through <none\|commit\|tag\|push>` | How far to carry the release, overriding `vump.toml` |
 | `--tag-style <annotated\|lightweight\|signed>` | How the tag object is written, overriding `vump.toml` |
 | `--allow-nested` | Act on a `vump.toml` nested below another anyway |
@@ -295,7 +295,7 @@ Pre-release channels are ordered `alpha < beta < rc`.
 | `1.2.3` | `patch` | `1.2.4` |
 | `1.2.3` | `minor` | `1.3.0` |
 | `1.2.3` | `major` | `2.0.0` |
-| `1.2.3` | `alpha --from minor` | `1.3.0-alpha.0` |
+| `1.2.3` | `alpha --toward minor` | `1.3.0-alpha.0` |
 | `1.2.3-alpha.0` | `alpha` | `1.2.3-alpha.1` |
 | `1.2.3-alpha.2` | `beta` | `1.2.3-beta.0` |
 | `1.2.3-rc.1` | `release` | `1.2.3` |
@@ -306,8 +306,8 @@ Refused, deliberately:
   force it, because there is no workflow that wants it.
 - **`patch`/`minor`/`major` while on a pre-release.** It is ambiguous between
   finalizing and abandoning. Run `release` first, then bump.
-- **A pre-release from a stable version without `--from`.** A pre-release must
-  know which release it precedes.
+- **A pre-release from a stable version without `--toward`.** A pre-release
+  must know which release it precedes.
 
 ## Repairing files that disagree
 

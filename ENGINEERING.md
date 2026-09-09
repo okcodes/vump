@@ -73,7 +73,7 @@ never prompts.
 | --- | --- |
 | Tracked files disagree | Error listing the disagreement. `set` is the repair. |
 | `patch` on a pre-release | Error naming the two explicit steps instead |
-| A pre-release from stable without `--from` | Error; the flag is required |
+| A pre-release from stable without `--toward` | Error; the flag is required |
 | Two projects claiming one tag | Reported, never attributed to a guess |
 | A release publishing no checksums | **Refused, not warned** |
 
