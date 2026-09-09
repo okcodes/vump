@@ -177,6 +177,19 @@ pub fn run(
     let index = ask.choose_transition(&base.to_string(), &choices)?;
     let (transition, _) = offered.get(index).ok_or(InteractionError::Cancelled)?;
 
+    // The questioner is asked not to return a blocked bump, and not trusted to
+    // have obeyed. Refused through the same check, so an implementation that
+    // ignores the marking is stopped by the rule rather than by good manners.
+    if availability[index] == Availability::Blocked {
+        app::change::check_branch(
+            vcs,
+            &targets[index],
+            reaches_commit,
+            &config.git,
+            BranchCheck::Enforce,
+        )?;
+    }
+
     // How far to carry the release, asked only when configuration has not said.
     let through = match config.git.through {
         Some(through) => through,
@@ -240,5 +253,358 @@ fn resolve_base(ask: &dyn Interaction, files: &[FileVersion]) -> Result<Version,
                 .parse()
                 .map_err(|_| InteractionError::Cancelled.into())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapters::{
+        Answer, MemoryFileSystem, MemoryInteraction, MemoryVcs, Question, VcsCall,
+    };
+    use crate::config::GitThrough;
+
+    const ROOT: &str = "/repo";
+
+    fn config(text: &str) -> Config {
+        Config::parse(Path::new("/repo/vump.toml"), text).expect("fixture parses")
+    }
+
+    /// A repository with one project recording `version`, tagging on bump.
+    fn single(version: &str) -> (MemoryFileSystem, Config) {
+        let fs = MemoryFileSystem::new().with_file("/repo/VERSION", format!("{version}\n"));
+        (
+            fs,
+            config("files = [\"VERSION\"]\n\n[git]\nthrough = \"tag\"\n"),
+        )
+    }
+
+    fn guidance() -> Guidance<'static> {
+        Guidance {
+            project: None,
+            branch: BranchCheck::Enforce,
+            summary: |plan| plan.changes.target.to_string(),
+            label: |transition| format!("{transition:?}"),
+        }
+    }
+
+    fn drive(
+        fs: &MemoryFileSystem,
+        vcs: &MemoryVcs,
+        ask: &MemoryInteraction,
+        config: &Config,
+        guidance: Guidance<'_>,
+    ) -> Result<Guided, GuidedError> {
+        run(fs, vcs, ask, Path::new(ROOT), config, guidance)
+    }
+
+    #[test]
+    fn a_repository_with_one_project_is_not_asked_which() {
+        // Every question a guided run can answer for itself is one it must not
+        // ask: the value of the guided path is that it asks the minimum.
+        let (fs, config) = single("1.2.3");
+        let vcs = MemoryVcs::new();
+        let ask = MemoryInteraction::new(&[Answer::Transition(0), Answer::Confirm(false)]);
+
+        drive(&fs, &vcs, &ask, &config, guidance()).unwrap();
+
+        assert!(
+            !ask.asked()
+                .iter()
+                .any(|q| matches!(q, Question::Project(_))),
+            "{:?}",
+            ask.asked()
+        );
+    }
+
+    #[test]
+    fn a_project_named_by_the_caller_is_not_asked_about() {
+        let fs = MemoryFileSystem::new()
+            .with_file("/repo/a/VERSION", "1.0.0\n")
+            .with_file("/repo/b/VERSION", "2.0.0\n");
+        let config = config(
+            "[[project]]\nname = \"a\"\nfiles = [\"a/VERSION\"]\ntag_pattern = \"a-v{new_version}\"\n\n\
+             [[project]]\nname = \"b\"\nfiles = [\"b/VERSION\"]\ntag_pattern = \"b-v{new_version}\"\n",
+        );
+        let vcs = MemoryVcs::new();
+        let ask = MemoryInteraction::new(&[
+            Answer::Transition(0),
+            Answer::Git(GitThrough::None),
+            Answer::Confirm(false),
+        ]);
+
+        let mut guidance = guidance();
+        guidance.project = Some("b");
+        drive(&fs, &vcs, &ask, &config, guidance).unwrap();
+
+        assert!(
+            !ask.asked()
+                .iter()
+                .any(|q| matches!(q, Question::Project(_)))
+        );
+    }
+
+    #[test]
+    fn several_projects_with_none_named_are_asked_about() {
+        let fs = MemoryFileSystem::new()
+            .with_file("/repo/a/VERSION", "1.0.0\n")
+            .with_file("/repo/b/VERSION", "2.0.0\n");
+        let config = config(
+            "[[project]]\nname = \"a\"\nfiles = [\"a/VERSION\"]\ntag_pattern = \"a-v{new_version}\"\n\n\
+             [[project]]\nname = \"b\"\nfiles = [\"b/VERSION\"]\ntag_pattern = \"b-v{new_version}\"\n",
+        );
+        let vcs = MemoryVcs::new();
+        let ask = MemoryInteraction::new(&[
+            Answer::Project("a".to_owned()),
+            Answer::Transition(0),
+            Answer::Git(GitThrough::None),
+            Answer::Confirm(false),
+        ]);
+
+        drive(&fs, &vcs, &ask, &config, guidance()).unwrap();
+
+        assert_eq!(
+            ask.asked().first(),
+            Some(&Question::Project(vec!["a".to_owned(), "b".to_owned()]))
+        );
+    }
+
+    #[test]
+    fn files_that_agree_are_not_asked_about() {
+        let fs = MemoryFileSystem::new()
+            .with_file("/repo/VERSION", "1.2.3\n")
+            .with_file("/repo/sub/VERSION", "1.2.3\n");
+        let config =
+            config("files = [\"VERSION\", \"sub/VERSION\"]\n\n[git]\nthrough = \"none\"\n");
+        let vcs = MemoryVcs::new();
+        let ask = MemoryInteraction::new(&[Answer::Transition(0), Answer::Confirm(false)]);
+
+        drive(&fs, &vcs, &ask, &config, guidance()).unwrap();
+
+        assert!(!ask.asked().iter().any(|q| matches!(q, Question::Base(_))));
+    }
+
+    #[test]
+    fn files_that_disagree_ask_which_version_is_current() {
+        // The disagreement is the whole reason the question exists, and the
+        // answer decides what every later question means.
+        let fs = MemoryFileSystem::new()
+            .with_file("/repo/VERSION", "1.2.3\n")
+            .with_file("/repo/sub/VERSION", "9.9.9\n");
+        let config =
+            config("files = [\"VERSION\", \"sub/VERSION\"]\n\n[git]\nthrough = \"none\"\n");
+        let vcs = MemoryVcs::new();
+        let ask = MemoryInteraction::new(&[
+            Answer::Base("9.9.9".to_owned()),
+            Answer::Transition(0),
+            Answer::Confirm(true),
+        ]);
+
+        let result = drive(&fs, &vcs, &ask, &config, guidance()).unwrap();
+
+        assert_eq!(
+            ask.asked().first(),
+            Some(&Question::Base(vec![
+                "1.2.3".to_owned(),
+                "9.9.9".to_owned()
+            ]))
+        );
+        let Guided::Applied(applied) = result else {
+            panic!("approved runs apply");
+        };
+        assert_eq!(applied.plan.from.to_string(), "9.9.9");
+    }
+
+    #[test]
+    fn configured_git_settings_are_not_asked_about() {
+        // A repository that has already said how far a release goes is never
+        // asked again. That is what leaves two questions in the common case.
+        let (fs, config) = single("1.2.3");
+        let vcs = MemoryVcs::new();
+        let ask = MemoryInteraction::new(&[Answer::Transition(0), Answer::Confirm(false)]);
+
+        drive(&fs, &vcs, &ask, &config, guidance()).unwrap();
+
+        assert!(!ask.asked().contains(&Question::Git));
+    }
+
+    #[test]
+    fn an_undeclared_git_step_is_asked_about() {
+        let fs = MemoryFileSystem::new().with_file("/repo/VERSION", "1.2.3\n");
+        let config = config("files = [\"VERSION\"]\n");
+        let vcs = MemoryVcs::new();
+        let ask = MemoryInteraction::new(&[
+            Answer::Transition(0),
+            Answer::Git(GitThrough::Commit),
+            Answer::Confirm(false),
+        ]);
+
+        drive(&fs, &vcs, &ask, &config, guidance()).unwrap();
+
+        assert!(ask.asked().contains(&Question::Git));
+    }
+
+    #[test]
+    fn declining_writes_nothing_and_touches_no_repository() {
+        // The confirmation is the last point at which nothing has happened, so
+        // it has to be the point at which nothing can.
+        let (fs, config) = single("1.2.3");
+        let vcs = MemoryVcs::new();
+        let ask = MemoryInteraction::new(&[Answer::Transition(0), Answer::Confirm(false)]);
+
+        let result = drive(&fs, &vcs, &ask, &config, guidance()).unwrap();
+
+        assert!(matches!(result, Guided::Declined));
+        assert_eq!(fs.get("/repo/VERSION").as_deref(), Some("1.2.3\n"));
+        assert!(
+            !vcs.calls().iter().any(|c| matches!(c, VcsCall::Commit(_))),
+            "{:?}",
+            vcs.calls()
+        );
+    }
+
+    #[test]
+    fn approving_writes_the_files_and_tags() {
+        let (fs, config) = single("1.2.3");
+        let vcs = MemoryVcs::new();
+        let ask = MemoryInteraction::new(&[Answer::Transition(0), Answer::Confirm(true)]);
+
+        let result = drive(&fs, &vcs, &ask, &config, guidance()).unwrap();
+
+        let Guided::Applied(applied) = result else {
+            panic!("approved runs apply");
+        };
+        assert_eq!(
+            fs.get("/repo/VERSION").as_deref(),
+            Some(format!("{}\n", applied.plan.changes.target).as_str())
+        );
+        assert!(
+            vcs.calls().iter().any(|c| matches!(c, VcsCall::Tag(_, _))),
+            "{:?}",
+            vcs.calls()
+        );
+    }
+
+    #[test]
+    fn the_summary_shown_is_the_plan_that_would_run() {
+        // The confirmation must describe the run being confirmed, not a
+        // recomputed guess at it.
+        let (fs, config) = single("1.2.3");
+        let vcs = MemoryVcs::new();
+        let ask = MemoryInteraction::new(&[Answer::Transition(0), Answer::Confirm(true)]);
+
+        let result = drive(&fs, &vcs, &ask, &config, guidance()).unwrap();
+
+        let Guided::Applied(applied) = result else {
+            panic!("approved runs apply");
+        };
+        assert!(
+            ask.asked()
+                .contains(&Question::Confirm(applied.plan.changes.target.to_string())),
+            "{:?}",
+            ask.asked()
+        );
+    }
+
+    #[test]
+    fn the_menu_marks_what_the_branch_policy_blocks() {
+        // The guided path is the one this guard exists for, so the list has to
+        // carry the answer rather than the refusal arriving afterwards.
+        let fs = MemoryFileSystem::new().with_file("/repo/VERSION", "1.2.3\n");
+        let config = config(
+            "files = [\"VERSION\"]\n\n[git]\nthrough = \"tag\"\nrelease_branches = [\"main\"]\n",
+        );
+        let vcs = MemoryVcs::new().on_branch("feat/x");
+        let ask = MemoryInteraction::new(&[Answer::Transition(0), Answer::Confirm(false)]);
+
+        drive(&fs, &vcs, &ask, &config, guidance()).unwrap_err();
+
+        let offered = ask.offered().expect("the bump is still asked");
+        let stable = offered
+            .iter()
+            .filter(|o| !o.result.contains('-'))
+            .collect::<Vec<_>>();
+        assert!(!stable.is_empty());
+        assert!(
+            stable
+                .iter()
+                .all(|o| o.availability == Availability::Blocked),
+            "{offered:?}"
+        );
+        assert!(
+            offered.iter().any(|o| o.availability == Availability::Free),
+            "{offered:?}"
+        );
+    }
+
+    #[test]
+    fn a_policy_blocking_everything_refuses_before_asking() {
+        // A menu with nothing selectable is a dead end, so it is never shown.
+        let fs = MemoryFileSystem::new().with_file("/repo/VERSION", "1.2.3\n");
+        let config = config(
+            "files = [\"VERSION\"]\n\n[git]\nthrough = \"tag\"\n\
+             release_branches = [\"main\"]\nprerelease_branches = [\"main\"]\n",
+        );
+        let vcs = MemoryVcs::new().on_branch("feat/x");
+        let ask = MemoryInteraction::new(&[]);
+
+        let error = drive(&fs, &vcs, &ask, &config, guidance()).unwrap_err();
+
+        assert!(
+            matches!(error, GuidedError::Change(ChangeError::OffBranch { .. })),
+            "{error:?}"
+        );
+        assert!(ask.offered().is_none(), "{:?}", ask.asked());
+    }
+
+    #[test]
+    fn waiving_the_policy_marks_the_bumps_and_says_so() {
+        // --any-branch restores the choice and keeps the hazard visible, which
+        // is the whole difference between waiving a guard and removing it.
+        let fs = MemoryFileSystem::new().with_file("/repo/VERSION", "1.2.3\n");
+        let config = config(
+            "files = [\"VERSION\"]\n\n[git]\nthrough = \"tag\"\nrelease_branches = [\"main\"]\n",
+        );
+        let vcs = MemoryVcs::new().on_branch("feat/x");
+        let ask = MemoryInteraction::new(&[Answer::Transition(0), Answer::Confirm(false)]);
+
+        let mut guidance = guidance();
+        guidance.branch = BranchCheck::Skipped;
+        drive(&fs, &vcs, &ask, &config, guidance).unwrap();
+
+        let offered = ask.offered().expect("every bump is still offered");
+        assert!(
+            offered
+                .iter()
+                .any(|o| o.availability == Availability::Warned),
+            "{offered:?}"
+        );
+        assert!(
+            ask.notices().iter().any(|n| n.contains("feat/x")),
+            "{:?}",
+            ask.notices()
+        );
+    }
+
+    #[test]
+    fn a_listed_branch_is_never_mentioned() {
+        // Nothing to say is said: a repository whose policy is satisfied looks
+        // exactly like one that has none.
+        let fs = MemoryFileSystem::new().with_file("/repo/VERSION", "1.2.3\n");
+        let config = config(
+            "files = [\"VERSION\"]\n\n[git]\nthrough = \"tag\"\nrelease_branches = [\"main\"]\n",
+        );
+        let vcs = MemoryVcs::new().on_branch("main");
+        let ask = MemoryInteraction::new(&[Answer::Transition(0), Answer::Confirm(false)]);
+
+        drive(&fs, &vcs, &ask, &config, guidance()).unwrap();
+
+        assert!(ask.notices().is_empty(), "{:?}", ask.notices());
+        assert!(
+            ask.offered()
+                .expect("asked")
+                .iter()
+                .all(|o| o.availability == Availability::Free)
+        );
     }
 }
