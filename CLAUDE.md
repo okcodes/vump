@@ -77,6 +77,15 @@ much faster than waiting for a runner to report the same thing.
   confirm platform differences, not to discover ordinary mistakes.
 - **If the same failure repeats, stop and report it.** Iterating on a wedged
   problem costs more than asking.
+- **Fix what the work already touches; file what it does not.** A defect found
+  beside the change gets fixed in the same pull request when three things hold:
+  it is small, it is in the same theme as the work, and the tests already being
+  run will prove it. Say in the reply that it was fixed and was not asked for,
+  so it can be cut on review. Anything needing a refactor, a design decision,
+  or an argument of its own goes to [`BACKLOG.md`](BACKLOG.md) in that same
+  pull request — the moment it is noticed is the only moment its reasoning is
+  cheap to write down. The option that is not available is noticing and doing
+  neither.
 - **Say plainly what is left for a human to do**, including anything that was
   deliberately left out.
 - **Push back.** Honest recommendations are wanted, including for removing

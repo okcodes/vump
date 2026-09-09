@@ -9,6 +9,12 @@ item here is built, its rules move into `DESIGN.md` and the entry is deleted.
 **Decided against** entries exist so a question is not reopened without new
 information. If you find yourself proposing one of them, say what changed.
 
+**A fix small enough to make now does not come here.** This file holds work
+that needs a decision, a design or a refactor. It is not a holding pen for
+things that could have been done in the pull request that found them — an entry
+reading "rename this" or "this comment is stale" costs more to file and re-read
+than to fix.
+
 An entry is ready to build when its *Problem* is agreed. The *Shape* is a
 starting point, not a specification — expect it to change while building.
 
