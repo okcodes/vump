@@ -86,6 +86,11 @@ much faster than waiting for a runner to report the same thing.
   pull request — the moment it is noticed is the only moment its reasoning is
   cheap to write down. The option that is not available is noticing and doing
   neither.
+- **A document earns its length.** These files are read by people and agents
+  with limited attention, and a page nobody finishes protects nothing. Prefer
+  deleting a stale paragraph to appending a correct one; when a finding is
+  worth keeping, write the finding, not the investigation. Length is not
+  thoroughness — it is the cost the next reader pays.
 - **Say plainly what is left for a human to do**, including anything that was
   deliberately left out.
 - **Push back.** Honest recommendations are wanted, including for removing
