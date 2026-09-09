@@ -17,7 +17,7 @@ use crate::domain::TagPattern;
 use crate::domain::TransitionError;
 use crate::domain::version_file::Tracked;
 use crate::ports::Annotation;
-use crate::ports::{FileSystem, Vcs, VcsError};
+use crate::ports::{Availability, FileSystem, Vcs, VcsError};
 
 /// A tracked file and the version it records today.
 ///
@@ -382,6 +382,50 @@ pub fn check_branch(
     }
 }
 
+/// How each candidate target stands against the release-branch policy.
+///
+/// One call rather than one per bump. The answer turns only on whether a
+/// target is stable, so however many bumps a guided run offers there are at
+/// most two distinct verdicts, and asking the repository twice is enough.
+///
+/// The same [`check_branch`] decides each one, waived, so what the menu shows
+/// and what a run refuses can never disagree.
+///
+/// # Errors
+///
+/// Returns [`ChangeError::Vcs`] when the repository cannot be inspected.
+pub fn offer(
+    vcs: &dyn Vcs,
+    targets: &[Version],
+    reaches_commit: bool,
+    git: &GitSettings,
+    check: BranchCheck,
+) -> Result<Vec<Availability>, ChangeError> {
+    // Indexed by maturity: [stable, pre-release].
+    let mut known: [Option<bool>; 2] = [None, None];
+    let mut availability = Vec::with_capacity(targets.len());
+
+    for target in targets {
+        let slot = usize::from(!target.pre.is_empty());
+        let off = if let Some(answer) = known[slot] {
+            answer
+        } else {
+            let answer =
+                check_branch(vcs, target, reaches_commit, git, BranchCheck::Skipped)?.is_some();
+            known[slot] = Some(answer);
+            answer
+        };
+
+        availability.push(match (off, check) {
+            (false, _) => Availability::Free,
+            (true, BranchCheck::Skipped) => Availability::Warned,
+            (true, BranchCheck::Enforce) => Availability::Blocked,
+        });
+    }
+
+    Ok(availability)
+}
+
 /// Builds the change set that writing `target` would produce.
 #[must_use]
 pub fn compose(
@@ -716,6 +760,97 @@ mod tests {
                 None
             );
         }
+    }
+
+    #[test]
+    fn a_menu_marks_what_the_policy_excludes() {
+        // The list is the explanation: a bump that cannot be taken is shown
+        // and marked, so its absence is never something to work out.
+        let vcs = MemoryVcs::new().on_branch("feat/x");
+        let targets = [v("1.2.4"), v("1.3.0"), v("1.2.4-alpha.0")];
+
+        let offered = offer(
+            &vcs,
+            &targets,
+            true,
+            &branch_policy(Some(&["main"]), None),
+            BranchCheck::Enforce,
+        )
+        .unwrap();
+
+        assert_eq!(
+            offered,
+            [
+                Availability::Blocked,
+                Availability::Blocked,
+                Availability::Free
+            ]
+        );
+    }
+
+    #[test]
+    fn waiving_the_check_marks_rather_than_clears() {
+        // --any-branch restores the choice; it does not make it look safe.
+        let vcs = MemoryVcs::new().on_branch("feat/x");
+        let targets = [v("1.2.4"), v("1.2.4-alpha.0")];
+
+        let offered = offer(
+            &vcs,
+            &targets,
+            true,
+            &branch_policy(Some(&["main"]), None),
+            BranchCheck::Skipped,
+        )
+        .unwrap();
+
+        assert_eq!(offered, [Availability::Warned, Availability::Free]);
+    }
+
+    #[test]
+    fn a_menu_asks_the_repository_once_per_maturity() {
+        // However many bumps are offered, the answer turns only on whether the
+        // target is stable, so the branch is looked up twice at most.
+        let vcs = MemoryVcs::new().on_branch("feat/x");
+        let targets = [
+            v("1.2.4"),
+            v("1.3.0"),
+            v("2.0.0"),
+            v("1.2.4-alpha.0"),
+            v("1.2.4-beta.0"),
+        ];
+
+        offer(
+            &vcs,
+            &targets,
+            true,
+            &branch_policy(Some(&["main"]), Some(&["develop"])),
+            BranchCheck::Enforce,
+        )
+        .unwrap();
+
+        let asked = vcs
+            .calls()
+            .iter()
+            .filter(|c| matches!(c, VcsCall::Branch))
+            .count();
+        assert_eq!(asked, 2, "{:?}", vcs.calls());
+    }
+
+    #[test]
+    fn a_run_that_reaches_no_commit_offers_everything() {
+        let vcs = MemoryVcs::new().on_branch("feat/x");
+        let targets = [v("1.2.4"), v("1.2.4-alpha.0")];
+
+        let offered = offer(
+            &vcs,
+            &targets,
+            false,
+            &branch_policy(Some(&["main"]), Some(&["main"])),
+            BranchCheck::Enforce,
+        )
+        .unwrap();
+
+        assert_eq!(offered, [Availability::Free, Availability::Free]);
     }
 
     #[test]

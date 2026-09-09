@@ -9,7 +9,7 @@ use std::io::IsTerminal;
 use serde_json::{Value, json};
 
 use crate::app::bump::BumpPlan;
-use crate::app::change::{ChangeSet, OffBranch, Outcome, TagPlan};
+use crate::app::change::{BranchCheck, ChangeSet, OffBranch, Outcome, TagPlan};
 use crate::app::check::CheckReport;
 use crate::app::status::ProjectStatus;
 use crate::app::update::{Channel, Listing, Release, UpdateOutcome};
@@ -109,17 +109,26 @@ pub fn check(report: &CheckReport, json: bool) {
 /// This is not the notice `DESIGN.md` decided against. That one announced which
 /// source a setting came from, with nothing to do about it. This one reports a
 /// hazard the caller can still act on, in the window where acting is cheap.
-pub fn off_branch(off: &OffBranch) {
+pub fn off_branch(off: &OffBranch, check: BranchCheck) {
     let key = if off.stable {
         "release_branches"
     } else {
         "prerelease_branches"
     };
     match &off.branch {
-        Some(branch) => eprintln!("warning: releasing from {branch}, which {key} does not list."),
-        None => eprintln!("warning: releasing from a detached HEAD, with {key} set."),
+        Some(branch) => eprintln!("warning: {branch} is not listed in {key}."),
+        None => eprintln!("warning: HEAD is detached, and {key} is set."),
     }
-    eprintln!("         --any-branch was passed, so this proceeds anyway.");
+    match check {
+        BranchCheck::Skipped => {
+            eprintln!("         --any-branch was passed, so this proceeds anyway.");
+        }
+        BranchCheck::Enforce => {
+            eprintln!(
+                "         Releases it governs are unavailable here; --any-branch allows them."
+            );
+        }
+    }
 }
 
 /// Renders the outcome of a `status`.

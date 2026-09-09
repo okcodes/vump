@@ -47,6 +47,34 @@ pub struct DirEntry {
     pub is_dir: bool,
 }
 
+/// How a bump stands against the repository's release-branch policy.
+///
+/// Three states rather than two flags: a bump cannot be both blocked and
+/// merely warned about, and a pair of booleans would let that be written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Availability {
+    /// Offered without qualification.
+    Free,
+    /// Offered, but it releases from a branch the policy excludes.
+    ///
+    /// Reached by waiving the check rather than by satisfying it, so the risk
+    /// is marked instead of hidden.
+    Warned,
+    /// Shown, but refused if chosen: the policy excludes it.
+    Blocked,
+}
+
+/// One bump a guided run offers, and whether it may be taken.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransitionChoice {
+    /// What the bump is called.
+    pub label: String,
+    /// The version it would produce.
+    pub result: String,
+    /// Whether the release-branch policy permits it.
+    pub availability: Availability,
+}
+
 /// Questions a run may need to put to a person.
 ///
 /// Only the interactive entry point uses this. Naming a subcommand selects an
@@ -71,8 +99,14 @@ pub trait Interaction {
 
     /// Asks which transition to apply, given those valid from here.
     ///
-    /// `options` pairs each choice with the version it would produce, and
-    /// contains only transitions that will succeed.
+    /// `options` contains every transition that would succeed as a version
+    /// change. One the release-branch policy excludes is shown rather than
+    /// dropped, so the reason it cannot be taken is visible instead of being
+    /// inferred from an absence, and choosing it is refused rather than
+    /// accepted.
+    ///
+    /// Returns an index into `options`, never one that is
+    /// [`Availability::Blocked`].
     ///
     /// # Errors
     ///
@@ -81,7 +115,7 @@ pub trait Interaction {
     fn choose_transition(
         &self,
         current: &str,
-        options: &[(String, String)],
+        options: &[TransitionChoice],
     ) -> Result<usize, InteractionError>;
 
     /// Asks how far to carry the release.

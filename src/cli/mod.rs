@@ -18,7 +18,7 @@ use crate::app::update::Channel;
 use crate::app::{self, AppError};
 use crate::config::{Config, ConfigError, GitThrough, TagStyle};
 use crate::domain::{PreLabel, StableBump, Transition, TransitionError};
-use crate::ports::{FsError, Interaction, InteractionError};
+use crate::ports::{Availability, FsError, Interaction, InteractionError, TransitionChoice};
 
 use exit::Exit;
 
@@ -546,29 +546,60 @@ fn interactive(ctx: &Context) -> Result<Exit, CliError> {
 
     // Which transition, offering only those that would succeed.
     let offered = app::bump::valid_transitions_for(&base)?;
-    let labelled: Vec<(String, String)> = offered
+
+    // What the branch policy makes of each bump, settled before the question is
+    // asked. A run that would be refused must not collect answers first, and a
+    // bump that is unavailable should say so in the list rather than be
+    // discovered afterwards.
+    //
+    // With `through` unset the run counts as reaching git, because that is what
+    // it does unless the next question says otherwise.
+    let vcs = GitCli::new(&ctx.root);
+    let reaches_commit = ctx.config.git.through.is_none_or(GitThrough::commits);
+    let targets: Vec<semver::Version> = offered.iter().map(|(_, next)| next.clone()).collect();
+    let availability =
+        app::change::offer(&vcs, &targets, reaches_commit, &ctx.config.git, ctx.branch)?;
+
+    // Whichever bump the policy has something to say about explains it for all
+    // of them: the branch and the list are the same either way.
+    if let Some(qualified) = availability.iter().position(|a| *a != Availability::Free) {
+        if let Some(off) = app::change::check_branch(
+            &vcs,
+            &targets[qualified],
+            reaches_commit,
+            &ctx.config.git,
+            BranchCheck::Skipped,
+        )? {
+            render::off_branch(&off, ctx.branch);
+        }
+    }
+
+    // Nothing selectable is a refusal, not a menu. Raised through the same
+    // check so the wording is the one every other refusal uses.
+    if availability.iter().all(|a| *a == Availability::Blocked) {
+        app::change::check_branch(
+            &vcs,
+            &targets[0],
+            reaches_commit,
+            &ctx.config.git,
+            BranchCheck::Enforce,
+        )?;
+    }
+
+    let choices: Vec<TransitionChoice> = offered
         .iter()
-        .map(|(t, next)| (describe_transition(*t), next.to_string()))
+        .zip(&availability)
+        .map(|((transition, next), availability)| TransitionChoice {
+            label: describe_transition(*transition),
+            result: next.to_string(),
+            availability: *availability,
+        })
         .collect();
-    let index = ask.choose_transition(&base.to_string(), &labelled)?;
-    let (transition, next) = offered
+
+    let index = ask.choose_transition(&base.to_string(), &choices)?;
+    let (transition, _) = offered
         .get(index)
         .ok_or(CliError::Interaction(InteractionError::Cancelled))?;
-
-    // Asked as soon as the target version is known, rather than after every
-    // remaining question: a run that is going to be refused must not collect
-    // answers first. With `through` unset the run counts as reaching git,
-    // because that is what it does unless the next question says otherwise.
-    let vcs = GitCli::new(&ctx.root);
-    if let Some(off) = app::change::check_branch(
-        &vcs,
-        next,
-        ctx.config.git.through.is_none_or(GitThrough::commits),
-        &ctx.config.git,
-        ctx.branch,
-    )? {
-        render::off_branch(&off);
-    }
 
     // How far to carry the release, asked only when configuration has not said.
     let through = match ctx.config.git.through {
@@ -695,7 +726,7 @@ fn bump(
         &ctx.config.git,
         ctx.branch,
     )? {
-        render::off_branch(&off);
+        render::off_branch(&off, ctx.branch);
     }
 
     if dry_run {
@@ -753,7 +784,7 @@ fn set(ctx: &Context, version: &str, dry_run: bool, git_args: &GitArgs) -> Resul
         &ctx.config.git,
         ctx.branch,
     )? {
-        render::off_branch(&off);
+        render::off_branch(&off, ctx.branch);
     }
 
     if dry_run {

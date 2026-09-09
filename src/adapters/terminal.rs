@@ -5,7 +5,7 @@ use std::io::IsTerminal;
 use inquire::{Confirm, Select};
 
 use crate::config::GitThrough;
-use crate::ports::{Interaction, InteractionError};
+use crate::ports::{Availability, Interaction, InteractionError, TransitionChoice};
 
 /// Asks questions on the terminal.
 #[derive(Debug, Default, Clone, Copy)]
@@ -86,7 +86,7 @@ impl Interaction for TerminalInteraction {
     fn choose_transition(
         &self,
         current: &str,
-        options: &[(String, String)],
+        options: &[TransitionChoice],
     ) -> Result<usize, InteractionError> {
         Self::require_terminal()?;
 
@@ -94,26 +94,60 @@ impl Interaction for TerminalInteraction {
         // what the reader is actually comparing.
         let width = options
             .iter()
-            .map(|(n, _)| n.len())
+            .map(|o| o.label.len())
+            .max()
+            .unwrap_or_default();
+        let result_width = options
+            .iter()
+            .map(|o| o.result.len())
             .max()
             .unwrap_or_default();
         let labels: Vec<String> = options
             .iter()
-            .map(|(name, result)| format!("{name:<width$}  ->  {result}"))
+            .map(|o| {
+                let row = format!(
+                    "{:<width$}  ->  {:<result_width$}",
+                    o.label,
+                    o.result,
+                    width = width,
+                    result_width = result_width
+                );
+                match o.availability {
+                    Availability::Free => row.trim_end().to_owned(),
+                    Availability::Warned => format!("{row}  ! from this branch"),
+                    Availability::Blocked => format!("{row}  — blocked on this branch"),
+                }
+            })
             .collect();
 
-        let chosen = Select::new(
-            &format!("Current version {current}. Bump to:"),
-            labels.clone(),
-        )
-        .with_page_size(12)
-        .prompt()
-        .map_err(|e| translate(&e))?;
+        // A blocked bump is listed so that its absence is never something to
+        // work out, and choosing it asks again rather than proceeding: the list
+        // is the explanation, so it has to stay on screen.
+        loop {
+            let chosen = Select::new(
+                &format!("Current version {current}. Bump to:"),
+                labels.clone(),
+            )
+            .with_page_size(12)
+            .prompt()
+            .map_err(|e| translate(&e))?;
 
-        labels
-            .iter()
-            .position(|l| *l == chosen)
-            .ok_or(InteractionError::Cancelled)
+            let index = labels
+                .iter()
+                .position(|l| *l == chosen)
+                .ok_or(InteractionError::Cancelled)?;
+
+            if options[index].availability == Availability::Blocked {
+                eprintln!(
+                    "{} releases from a branch this repository does not list. \
+                     Choose another, or re-run with --any-branch.",
+                    options[index].label
+                );
+                continue;
+            }
+
+            return Ok(index);
+        }
     }
 
     fn choose_git(&self) -> Result<GitThrough, InteractionError> {
@@ -173,7 +207,7 @@ impl Interaction for NoInteraction {
     fn choose_transition(
         &self,
         _: &str,
-        _: &[(String, String)],
+        _: &[TransitionChoice],
     ) -> Result<usize, InteractionError> {
         Self::refuse()
     }

@@ -12,6 +12,8 @@ use crate::ports::{Annotation, Vcs, VcsError, WorkingTree};
 /// One operation performed against the repository.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VcsCall {
+    /// The current branch was asked for.
+    Branch,
     /// Paths were staged.
     Stage(Vec<String>),
     /// A commit was created with this message.
@@ -118,6 +120,9 @@ impl Vcs for MemoryVcs {
 
     fn current_branch(&self) -> Result<Option<String>, VcsError> {
         self.guard("branch")?;
+        // Recorded like any other call: asking the repository more often than
+        // the answer can change is a defect a test should be able to see.
+        self.record(VcsCall::Branch);
         Ok(lock(&self.branch).clone())
     }
 
