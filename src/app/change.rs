@@ -5,7 +5,7 @@
 //! tracked file, then optionally commit, tag and push. That shared part lives
 //! here, so neither operation has to describe itself in the other's terms.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use semver::Version;
 use thiserror::Error;
@@ -197,7 +197,7 @@ pub enum ChangeError {
     /// printed, the tag is on the remote, and a warning above a `check` verdict
     /// does not stop the verdict being believed.
     #[error(
-        "{inner} sits below another {file}, so this acts on the nested project rather \
+        "{inner} sits below {outer}, so this acts on the nested project rather \
          than on the one above it: a bump would still commit and tag beyond what this \
          {file} describes, and a check would answer about the wrong project.\n\n\
          Several projects that version separately are declared as [[project]] entries \
@@ -207,8 +207,15 @@ pub enum ChangeError {
         file = crate::config::FILE_NAME
     )]
     NestedConfig {
-        /// The configuration in effect, named as every message names one.
-        inner: String,
+        /// The configuration in effect, in full.
+        ///
+        /// In full because a relative path needs a frame, and the reader cannot
+        /// see which one was chosen: below two configurations, a path relative
+        /// to the nearer one starts partway down a tree and reads as if it
+        /// started at the top.
+        inner: PathBuf,
+        /// The configuration it shadows, in full.
+        outer: PathBuf,
     },
 
     /// A git operation failed.
@@ -254,12 +261,13 @@ pub fn check_nesting(
     if nesting == Nesting::Allowed {
         return Ok(());
     }
-    if crate::app::outer_config(fs, root).is_none() {
+    let Some(outer) = crate::app::outer_config(fs, root) else {
         return Ok(());
-    }
+    };
 
     Err(ChangeError::NestedConfig {
-        inner: crate::app::describe_config(fs, root),
+        inner: root.join(crate::config::FILE_NAME),
+        outer,
     })
 }
 

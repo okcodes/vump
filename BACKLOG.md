@@ -9,6 +9,12 @@ item here is built, its rules move into `DESIGN.md` and the entry is deleted.
 **Decided against** entries exist so a question is not reopened without new
 information. If you find yourself proposing one of them, say what changed.
 
+**A fix small enough to make now does not come here.** This file holds work
+that needs a decision, a design or a refactor. It is not a holding pen for
+things that could have been done in the pull request that found them — an entry
+reading "rename this" or "this comment is stale" costs more to file and re-read
+than to fix.
+
 An entry is ready to build when its *Problem* is agreed. The *Shape* is a
 starting point, not a specification — expect it to change while building.
 
@@ -145,16 +151,6 @@ The reason not to rush: a crate inside this repository's tree is not inert the
 way an npm or C# project is. It would need excluding from the workspace, and a
 mistake there breaks `cargo build` for the tool itself.
 
-### Reporting the configuration on more than status
-
-`status` names the configuration that answered it. `check` does not, and its
-verdict is the one that gets believed: a CI log saying only "1.2.3 matches"
-does not record *which* project it matched.
-
-Left out because the nested refusal already closes the case that motivated it,
-and a repository with a single configuration has no ambiguity to report. Worth
-revisiting if a CI log ever has to be read back to work out what was verified.
-
 ### Inputs on the check action
 
 The composite action takes `version`, `config` and `vump-version`. Passing a
@@ -252,6 +248,37 @@ the same reason.
 They record a dependency graph, and a version bump does not change one. An
 earlier advisory named them anyway, which meant telling people to run an
 install that would change nothing.
+
+### Reporting which `vump.toml` answered
+
+Built and shipped in 0.4.0: `status` printed the configuration in effect above
+the versions, named relative to the configuration above it. Removed in the next
+release.
+
+The case for it was that discovery searches upward, so a report that omits the
+file looks the same from everywhere. But one configuration is the only
+supported layout, and there it prints `vump.toml` — a line carrying nothing.
+The line only says something when configurations are stacked, which is the
+arrangement `[[project]]` exists to prevent, so the feature spent its whole
+budget on a layout the tool refuses.
+
+Naming it also needed a frame, and every frame was wrong somewhere. Relative to
+the working directory, a nested file and a repository's own both read
+`vump.toml`. Relative to the repository root, git decides a question that has
+nothing to do with git. Relative to the configuration above — what shipped —
+reads correctly with two configurations and misleads with three: from
+`mid/deep/inner/` the report said `deep/inner/vump.toml`, a fragment anchored to
+a file the reader cannot see. Anchoring at the outermost configuration instead
+would mean searching to the filesystem root to render one line.
+
+Only `status` printed it, so the same question went unanswered by `check`,
+whose verdict is the one that gets believed. Extending it to every command
+would have multiplied a cost already not worth paying once.
+
+What closes the case: the nesting refusal already names both files, in full,
+and it fires exactly when the answer matters. Worth reopening only if a CI log
+has to be read back to work out which project was verified — and the fix then
+is `check` naming its project, not any command naming its configuration.
 
 ### Announcing that a flag overrode configuration
 
