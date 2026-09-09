@@ -43,17 +43,17 @@ A version is either **stable** (`1.2.3`) or a **pre-release**
 alpha < beta < rc
 ```
 
-| Current       | Operation            | Result          |
-| ------------- | -------------------- | --------------- |
-| `1.2.3`       | `patch`              | `1.2.4`         |
-| `1.2.3`       | `minor`              | `1.3.0`         |
-| `1.2.3`       | `major`              | `2.0.0`         |
-| `1.2.3`       | `alpha --from patch` | `1.2.4-alpha.0` |
-| `1.2.3`       | `alpha --from minor` | `1.3.0-alpha.0` |
-| `1.2.3-alpha.0` | `alpha`            | `1.2.3-alpha.1` |
-| `1.2.3-alpha.2` | `beta`             | `1.2.3-beta.0`  |
-| `1.2.3-beta.1`  | `rc`               | `1.2.3-rc.0`    |
-| `1.2.3-rc.1`    | `release`          | `1.2.3`         |
+| Current         | Operation              | Result          |
+| --------------- | ---------------------- | --------------- |
+| `1.2.3`         | `patch`                | `1.2.4`         |
+| `1.2.3`         | `minor`                | `1.3.0`         |
+| `1.2.3`         | `major`                | `2.0.0`         |
+| `1.2.3`         | `alpha --toward patch` | `1.2.4-alpha.0` |
+| `1.2.3`         | `alpha --toward minor` | `1.3.0-alpha.0` |
+| `1.2.3-alpha.0` | `alpha`                | `1.2.3-alpha.1` |
+| `1.2.3-alpha.2` | `beta`                 | `1.2.3-beta.0`  |
+| `1.2.3-beta.1`  | `rc`                   | `1.2.3-rc.0`    |
+| `1.2.3-rc.1`    | `release`              | `1.2.3`         |
 
 Rules that fall out of the table:
 
@@ -61,7 +61,10 @@ Rules that fall out of the table:
 - Advancing to a **higher** label resets the counter to `0`.
 - Moving to a **lower** label is refused. This is a mistake, not a workflow.
 - Starting a pre-release from a stable version requires knowing which stable
-  version it precedes, hence the mandatory `--from`.
+  version it precedes, hence the mandatory `--toward`. It is spelled for the
+  release being moved *to*, because `from` throughout vump means the version
+  being left: `BumpPlan.from`, the channel pair in a backwards-move refusal,
+  and the `from`/`to` keys in JSON output all point the other way.
 - `release` on an already-stable version is an error.
 
 ### Deliberately excluded: `patch`/`minor`/`major` on a pre-release
@@ -469,8 +472,8 @@ an actionable error** rather than falling back to asking:
 - **Files disagree** on the current version → error listing the disagreement.
   There is no flag to resolve this non-interactively; a source of truth
   contradicting itself is an exceptional state that a human should look at.
-- **Starting a pre-release from stable without `--from`** → error. `--from` is
-  required, not optional-with-a-prompt.
+- **Starting a pre-release from stable without `--toward`** → error. `--toward`
+  is required, not optional-with-a-prompt.
 - **`patch`/`minor`/`major` on a pre-release** → error, per §2.
 - **An undeclared lock file that records the version** → error naming it.
 
@@ -481,10 +484,15 @@ a push failing after the commit and tag succeeded — exactly what did happen is
 reported instead.
 
 In interactive mode, the only question vump asks unconditionally is the bump
-type, and its menu lists **only operations valid from the current version** —
-invalid choices are omitted, not displayed with an explanation of why they will
-fail. Everything else is asked only when configuration has not already settled
-it.
+type, and its menu lists **only operations the current version permits** — a
+transition that could not apply, such as `patch` on a pre-release, is omitted
+rather than displayed with an explanation of why it will fail. A transition
+that would apply but the branch policy excludes is a different case, and is
+marked rather than dropped, per §3. Everything else is asked only when
+configuration has not already settled it.
+
+Every label the menu prints is the non-interactive invocation for that choice,
+so the menu doubles as documentation of the flag it teaches.
 
 There is deliberately **no `-y`/`--auto-approve` flag.** Once a subcommand
 never prompts by construction, the subcommand *is* the confirmation, in the
@@ -495,7 +503,7 @@ same way `rm file` needs no confirmation flag.
 ```
 vump                      Interactive bump
 vump patch|minor|major    Bump a stable version
-vump alpha|beta|rc        Start or advance a pre-release (--from required from stable)
+vump alpha|beta|rc        Start or advance a pre-release (--toward required from stable)
 vump release              Drop the pre-release suffix
 vump set <version>        Write an exact version to every tracked file
 vump check <version>      Verify tracked files match the given version
@@ -511,18 +519,26 @@ vump self list            List published releases
 | Flag                | Applies to      | Description                                    |
 | ------------------- | --------------- | ---------------------------------------------- |
 | `--dry-run`         | bump commands   | Compute and report the plan, write nothing     |
-| `--from <bump>`     | pre-release     | Stable bump the pre-release is based on        |
+| `--toward <bump>`   | pre-release     | Stable release the pre-release leads to        |
 | `--project <name>`  | all             | Select a project in a multi-project repository |
 | `--through <step>`  | bump commands   | How far to carry the release: `none`, `commit`, `tag`, `push` |
 | `--tag-style <style>` | bump commands | How the tag object is written                  |
 | `--allow-nested`    | global          | Act on a configuration nested below another    |
 | `--any-branch`      | global          | Release from a branch the configuration does not list |
 | `--json`            | global          | Machine-readable output                        |
+| `--channel <name>`  | `self`          | Least mature kind of release to accept         |
+| `--to <version>`    | `self update`   | Install this exact version, newer or older     |
 
 Both replace the `[git]` setting of the same name for one run. There is no
 escape hatch to keep separate from them, because `--through none` *is* the
 escape hatch, and no pairing of flags can contradict itself when only one names
 the answer.
+
+A flag name is scoped to the commands it applies to, so the same spelling may
+mean different things in different columns above and never appear together in
+one invocation. `--to` takes a version when updating the binary; a bump
+command's `--toward` takes a bump name. Reading a name as reserved across the
+whole surface is a mistake — the "Applies to" column is what settles it.
 
 Only files declared in configuration are staged. If the run reaches a commit, a
 dirty working tree is a hard failure — a version bump must not sweep unrelated

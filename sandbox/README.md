@@ -76,7 +76,7 @@ For C#, the version reaches the assembly:
 
 ```bash
 cd sandbox/cs/single-project
-vump alpha --from minor --allow-nested
+vump alpha --toward minor --allow-nested
 dotnet run --project Demo            # Demo 1.1.0-alpha.0
 ```
 
