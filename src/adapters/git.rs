@@ -60,6 +60,14 @@ impl Vcs for GitCli {
         })
     }
 
+    fn current_branch(&self) -> Result<Option<String>, VcsError> {
+        // --show-current prints an empty line and succeeds on a detached HEAD,
+        // where symbolic-ref would exit non-zero and be reported as a failure.
+        let out = self.run("branch", &["branch", "--show-current"])?;
+        let name = out.trim();
+        Ok((!name.is_empty()).then(|| name.to_owned()))
+    }
+
     fn stage(&self, paths: &[String]) -> Result<(), VcsError> {
         let mut args = vec!["add", "--"];
         args.extend(paths.iter().map(String::as_str));

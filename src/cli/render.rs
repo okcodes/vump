@@ -9,7 +9,7 @@ use std::io::IsTerminal;
 use serde_json::{Value, json};
 
 use crate::app::bump::BumpPlan;
-use crate::app::change::{ChangeSet, Outcome, TagPlan};
+use crate::app::change::{ChangeSet, OffBranch, Outcome, TagPlan};
 use crate::app::check::CheckReport;
 use crate::app::status::ProjectStatus;
 use crate::app::update::{Channel, Listing, Release, UpdateOutcome};
@@ -98,6 +98,28 @@ pub fn check(report: &CheckReport, json: bool) {
         eprintln!("  {mark}  {:<width$}  {}", file.path, file.version);
     }
     eprintln!();
+}
+
+/// Warns that a release is proceeding from a branch the configuration excludes.
+///
+/// Printed even under `--json`, because it goes to stderr and leaves the
+/// machine-readable result on stdout intact. A waived guard that says nothing
+/// is a guard nobody notices they turned off.
+///
+/// This is not the notice `DESIGN.md` decided against. That one announced which
+/// source a setting came from, with nothing to do about it. This one reports a
+/// hazard the caller can still act on, in the window where acting is cheap.
+pub fn off_branch(off: &OffBranch) {
+    let key = if off.stable {
+        "release_branches"
+    } else {
+        "prerelease_branches"
+    };
+    match &off.branch {
+        Some(branch) => eprintln!("warning: releasing from {branch}, which {key} does not list."),
+        None => eprintln!("warning: releasing from a detached HEAD, with {key} set."),
+    }
+    eprintln!("         --any-branch was passed, so this proceeds anyway.");
 }
 
 /// Renders the outcome of a `status`.

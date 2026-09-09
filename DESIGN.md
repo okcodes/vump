@@ -330,6 +330,8 @@ commit_message = "chore: bump version to v{new_version}"
 tag_pattern = "v{new_version}"
 tag_style = "annotated"          # or "lightweight", or "signed"
 tag_message = "Release {new_version}"
+release_branches = ["main"]      # optional; unset means any branch
+prerelease_branches = ["main"]   # optional; unset means any branch
 ```
 
 **How far a bump goes is one ordered setting, not several booleans.** The steps
@@ -384,6 +386,59 @@ reach. `tag_pattern` deliberately does not. `check` reads it in reverse to work
 out which project a pushed tag belongs to, so a one-run override would produce
 a tag that verification cannot attribute — the pattern is a parser, not a
 preference.
+
+#### Where a release may be tagged from
+
+`release_branches` and `prerelease_branches` name the branches a release may be
+tagged from. Both are optional and independent, and **absence means
+unconstrained** — an empty list is refused when the file is read, because it
+could only ever refuse and the run that reads it is never the run that can act
+on the answer.
+
+**Which list applies is decided by the version, not by the command.** A target
+carrying a pre-release component answers to `prerelease_branches`; one without
+answers to `release_branches`. So `set 1.2.3` is governed exactly as `patch` is
+and `set 1.2.3-beta.1` exactly as `beta` is, and nothing has to enumerate which
+commands release.
+
+**They are separate settings because the two are held to different standards
+almost everywhere.** A stable tag is what people install, and every release
+tool agrees it comes from the trunk. A pre-release is how unfinished work is
+shared *without* merging it first — GitVersion derives a pre-release label from
+the feature branch as its core model, and semantic-release ships prerelease
+branches by default. Constraining both with one list would mean merging before
+sharing, which is the thing a pre-release exists to avoid.
+
+The reason to make it configurable at all rather than simply exempting
+pre-releases: the tools that publish freely from feature branches mostly do not
+write a durable git tag — GitVersion computes a version without tagging, and a
+changesets snapshot is a dist-tag publish. vump writes a real tag, which
+outlives the branch. So the practice is mainstream but not free here, and a
+team that would rather not pay for it can say so.
+
+**Only a run that reaches a commit is covered.** A run that writes files and
+stops leaves nothing behind that could belong to the wrong branch, and refusing
+it would block bumping a version inside a pull request — which is where a
+version is supposed to change. This is narrower than the nesting refusal
+deliberately: nesting refuses reading too, because `check` can pass confidently
+about the wrong project, and reading on a feature branch is not wrong in that
+way.
+
+The check runs once the plan is composed and before it is applied, so the target
+version is known and a refusal has still written nothing. A `--dry-run` is
+refused as well, on the same reasoning as a nested one: a plan for a run that
+would be refused is not a plan.
+
+**A detached `HEAD` is refused where a policy exists**, since a tag made there
+belongs to no branch at all. Where no policy exists it is nobody's business but
+the caller's — the check is opt-in in both directions.
+
+`--any-branch` proceeds anyway, and the run says what it waived. That notice is
+not the one [`BACKLOG.md`](BACKLOG.md) decided against: that entry rejected
+announcing which *source* a setting came from, a notice with nothing to do
+about it. This one reports a hazard the caller can still act on, in the window
+where acting is cheap, and it fires only when the flag actually overrides
+something.
 
 ## 4. CLI contract
 
@@ -450,6 +505,7 @@ vump self list            List published releases
 | `--through <step>`  | bump commands   | How far to carry the release: `none`, `commit`, `tag`, `push` |
 | `--tag-style <style>` | bump commands | How the tag object is written                  |
 | `--allow-nested`    | global          | Act on a configuration nested below another    |
+| `--any-branch`      | global          | Release from a branch the configuration does not list |
 | `--json`            | global          | Machine-readable output                        |
 
 Both replace the `[git]` setting of the same name for one run. There is no

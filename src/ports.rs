@@ -145,6 +145,17 @@ pub trait Vcs {
     /// Returns [`VcsError`] when the repository cannot be inspected.
     fn status(&self) -> Result<WorkingTree, VcsError>;
 
+    /// The branch `HEAD` points at, or `None` when `HEAD` is detached.
+    ///
+    /// The absence is genuine rather than a failure: a detached `HEAD` is a
+    /// state a repository is legitimately in, and what it means for the
+    /// operation at hand is the caller's decision, not this port's.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VcsError`] when the repository cannot be inspected.
+    fn current_branch(&self) -> Result<Option<String>, VcsError>;
+
     /// Stages the given paths, which are relative to the repository root.
     ///
     /// # Errors

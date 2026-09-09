@@ -63,6 +63,7 @@ needs, or it fails saying what is missing.
 | `--through <none\|commit\|tag\|push>` | How far to carry the release, overriding `vump.toml` |
 | `--tag-style <annotated\|lightweight\|signed>` | How the tag object is written, overriding `vump.toml` |
 | `--allow-nested` | Act on a `vump.toml` nested below another anyway |
+| `--any-branch` | Release from a branch `vump.toml` does not list |
 | `--project <name>` | Select a project in a multi-project repository |
 | `--json` | Machine-readable output |
 | `--channel <c>` | `self` commands: least mature release to accept |
@@ -149,6 +150,36 @@ refused as well, since that is where a second `vump.toml` would come from.
 
 `--allow-nested` proceeds anyway, and having to type it every time is intended:
 it means a feature that would remove the need is going unused.
+
+## Releasing only from certain branches
+
+Merge a pull request, forget you are still on its branch, and a release lands a
+commit and a tag somewhere that no longer exists upstream. The tag outlives the
+branch, so cleaning up means deleting it locally and on the remote.
+
+```toml
+[git]
+release_branches = ["main"]
+```
+
+Both keys are optional and independent, and leaving one out means any branch
+will do:
+
+| Key | Governs |
+| --- | --- |
+| `release_branches` | versions with no pre-release part — `1.2.3` |
+| `prerelease_branches` | versions with one — `1.2.3-beta.1` |
+
+They are separate because most teams want them to be. Stable releases come from
+the trunk; a pre-release is how you share unfinished work *without* merging it
+first, so locking both to `main` would defeat the point. Set only the first and
+you get exactly that: stable releases from `main`, alphas from wherever you are
+working.
+
+Only runs that reach a commit are checked — `--through none` writes files and is
+never refused, so bumping a version inside a pull request still works. A
+detached `HEAD` is refused whenever either key is set. `--any-branch` proceeds
+anyway and says what it waived.
 
 ### Tagging independently-versioned projects
 

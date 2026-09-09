@@ -149,8 +149,30 @@ pub struct GitPlanning<'a> {
 
 /// Whether a run may act on a configuration nested inside another's.
 ///
-/// A closed pair rather than a bare boolean, so the intent is legible where it
-/// is passed rather than only where it is declared.
+/// Whether the branch a release is made from is checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BranchCheck {
+    /// Refuse a release from a branch the configuration does not list.
+    Enforce,
+    /// Proceed anyway: the caller passed `--any-branch`.
+    Skipped,
+}
+
+/// A release being made from a branch the configuration does not list.
+///
+/// Returned rather than raised when the caller has waived the check, so the
+/// waiver still says what was waived.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OffBranch {
+    /// The branch `HEAD` is on, or `None` when it is detached.
+    pub branch: Option<String>,
+    /// Branches this maturity of release may be tagged from.
+    pub allowed: Vec<String>,
+    /// Whether the version being released is stable.
+    pub stable: bool,
+}
+
+/// Whether a configuration is acted on from below another.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Nesting {
     /// Refuse, naming the outer configuration and the way out.
@@ -218,6 +240,33 @@ pub enum ChangeError {
         outer: PathBuf,
     },
 
+    /// A release was made from a branch the configuration does not list.
+    #[error(
+        "{maturity} comes from {branches}, but HEAD is on {branch}.\n\n\
+         A tag belongs to the branch it was made on. Delete that branch and the \
+         tag is left pointing at a commit nothing reaches, which then has to be \
+         removed by hand, locally and on the remote.\n\n\
+         Switch branches, or pass --any-branch to release from here anyway.",
+        maturity = if *stable { "a stable release" } else { "a pre-release" },
+        branches = allowed.join(", ")
+    )]
+    OffBranch {
+        /// The branch `HEAD` is on.
+        branch: String,
+        /// Branches this maturity of release may be tagged from.
+        allowed: Vec<String>,
+        /// Whether the version being released is stable.
+        stable: bool,
+    },
+
+    /// A release was attempted with no branch checked out.
+    #[error(
+        "HEAD is detached, so a release tagged here would belong to no branch \
+         at all and nothing would reach the commit it names.\n\n\
+         Check out a branch, or pass --any-branch to release from here anyway."
+    )]
+    DetachedHead,
+
     /// A git operation failed.
     #[error("{0}")]
     Vcs(#[from] VcsError),
@@ -269,6 +318,68 @@ pub fn check_nesting(
         inner: root.join(crate::config::FILE_NAME),
         outer,
     })
+}
+
+/// Refuses a release from a branch the configuration does not list.
+///
+/// Only a run that reaches a commit is covered. A run that writes files and
+/// stops leaves nothing behind that could belong to the wrong branch, and
+/// refusing it would block bumping a version in a pull request — which is
+/// where a version is supposed to change.
+///
+/// That makes this narrower than [`check_nesting`], deliberately. Nesting
+/// refuses reading too, because `check` can pass confidently about the wrong
+/// project. Reading on a feature branch is not wrong in the same way: `status`
+/// and `check` answer correctly wherever they are run.
+///
+/// Takes the target version rather than a composed plan, so an interactive run
+/// can ask it as soon as the bump is chosen instead of after every remaining
+/// question. One rule, asked from wherever the answer is first knowable.
+///
+/// # Errors
+///
+/// Returns [`ChangeError::OffBranch`] or [`ChangeError::DetachedHead`] when the
+/// branch is not listed and the caller has not waived the check.
+pub fn check_branch(
+    vcs: &dyn Vcs,
+    target: &Version,
+    reaches_commit: bool,
+    git: &GitSettings,
+    check: BranchCheck,
+) -> Result<Option<OffBranch>, ChangeError> {
+    if !reaches_commit {
+        return Ok(None);
+    }
+    let Some(allowed) = git.branches_for(target) else {
+        return Ok(None);
+    };
+
+    let branch = vcs.current_branch()?;
+    if branch
+        .as_deref()
+        .is_some_and(|on| allowed.iter().any(|listed| listed == on))
+    {
+        return Ok(None);
+    }
+
+    let off = OffBranch {
+        branch,
+        allowed: allowed.to_vec(),
+        stable: target.pre.is_empty(),
+    };
+
+    match check {
+        // Waived, not unnoticed: the caller still gets told what they waived.
+        BranchCheck::Skipped => Ok(Some(off)),
+        BranchCheck::Enforce => Err(match off.branch {
+            Some(branch) => ChangeError::OffBranch {
+                branch,
+                allowed: off.allowed,
+                stable: off.stable,
+            },
+            None => ChangeError::DetachedHead,
+        }),
+    }
 }
 
 /// Builds the change set that writing `target` would produce.
@@ -443,6 +554,189 @@ mod tests {
                 tag_message: DEFAULT_TAG_MESSAGE,
             },
         )
+    }
+
+    fn branch_policy(release: Option<&[&str]>, prerelease: Option<&[&str]>) -> GitSettings {
+        let owned = |b: &[&str]| b.iter().map(|s| (*s).to_owned()).collect();
+        GitSettings {
+            release_branches: release.map(owned),
+            prerelease_branches: prerelease.map(owned),
+            ..GitSettings::default()
+        }
+    }
+
+    #[test]
+    fn a_stable_release_from_an_unlisted_branch_is_refused() {
+        let vcs = MemoryVcs::new().on_branch("feat/x");
+        let changes = changeset(&[("VERSION", "1.2.3")], "1.2.4", GitThrough::Tag);
+
+        let err = check_branch(
+            &vcs,
+            &changes.target,
+            changes.git.touches_repository(),
+            &branch_policy(Some(&["main"]), None),
+            BranchCheck::Enforce,
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, ChangeError::OffBranch { .. }), "{err:?}");
+        // Both halves of the fix have to be in the message: where releases come
+        // from, and where the caller actually is.
+        assert!(err.to_string().contains("feat/x"), "{err}");
+        assert!(err.to_string().contains("main"), "{err}");
+    }
+
+    #[test]
+    fn a_pre_release_answers_to_its_own_list() {
+        // Locking stable releases to a branch is the common policy, and it must
+        // not drag pre-releases along: sharing unfinished work would then mean
+        // merging it first, which is what a pre-release exists to avoid.
+        let vcs = MemoryVcs::new().on_branch("feat/x");
+        let policy = branch_policy(Some(&["main"]), None);
+
+        let alpha = changeset(&[("VERSION", "1.2.3")], "1.3.0-alpha.0", GitThrough::Tag);
+        assert_eq!(
+            check_branch(
+                &vcs,
+                &alpha.target,
+                alpha.git.touches_repository(),
+                &policy,
+                BranchCheck::Enforce
+            )
+            .unwrap(),
+            None
+        );
+
+        let stable = changeset(&[("VERSION", "1.2.3")], "1.2.4", GitThrough::Tag);
+        assert!(
+            check_branch(
+                &vcs,
+                &stable.target,
+                stable.git.touches_repository(),
+                &policy,
+                BranchCheck::Enforce
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn a_pre_release_can_be_constrained_on_its_own() {
+        let vcs = MemoryVcs::new().on_branch("feat/x");
+        let alpha = changeset(&[("VERSION", "1.2.3")], "1.3.0-alpha.0", GitThrough::Tag);
+
+        let err = check_branch(
+            &vcs,
+            &alpha.target,
+            alpha.git.touches_repository(),
+            &branch_policy(None, Some(&["develop"])),
+            BranchCheck::Enforce,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("develop"), "{err}");
+    }
+
+    #[test]
+    fn a_listed_branch_releases() {
+        let vcs = MemoryVcs::new().on_branch("main");
+        let changes = changeset(&[("VERSION", "1.2.3")], "1.2.4", GitThrough::Tag);
+
+        assert_eq!(
+            check_branch(
+                &vcs,
+                &changes.target,
+                changes.git.touches_repository(),
+                &branch_policy(Some(&["main", "release"]), None),
+                BranchCheck::Enforce
+            )
+            .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_run_reaching_no_commit_is_not_governed() {
+        // Writing files and stopping leaves nothing behind that could belong to
+        // the wrong branch, and refusing it would block bumping a version in a
+        // pull request.
+        let vcs = MemoryVcs::new().on_branch("feat/x");
+        let changes = changeset(&[("VERSION", "1.2.3")], "1.2.4", GitThrough::None);
+
+        assert_eq!(
+            check_branch(
+                &vcs,
+                &changes.target,
+                changes.git.touches_repository(),
+                &branch_policy(Some(&["main"]), None),
+                BranchCheck::Enforce
+            )
+            .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_detached_head_is_refused_where_a_policy_exists() {
+        let vcs = MemoryVcs::new().detached();
+        let changes = changeset(&[("VERSION", "1.2.3")], "1.2.4", GitThrough::Tag);
+
+        let err = check_branch(
+            &vcs,
+            &changes.target,
+            changes.git.touches_repository(),
+            &branch_policy(Some(&["main"]), None),
+            BranchCheck::Enforce,
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, ChangeError::DetachedHead), "{err:?}");
+    }
+
+    #[test]
+    fn no_policy_governs_nothing() {
+        // The whole check is opt-in, so a detached HEAD is only an obstacle to
+        // someone who declared where releases come from.
+        let changes = changeset(&[("VERSION", "1.2.3")], "1.2.4", GitThrough::Tag);
+        let settings = GitSettings::default();
+
+        for vcs in [
+            MemoryVcs::new().detached(),
+            MemoryVcs::new().on_branch("feat/x"),
+        ] {
+            assert_eq!(
+                check_branch(
+                    &vcs,
+                    &changes.target,
+                    changes.git.touches_repository(),
+                    &settings,
+                    BranchCheck::Enforce
+                )
+                .unwrap(),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn waiving_the_check_still_reports_what_was_waived() {
+        // --any-branch proceeds; it does not make the hazard go unmentioned.
+        let vcs = MemoryVcs::new().on_branch("feat/x");
+        let changes = changeset(&[("VERSION", "1.2.3")], "1.2.4", GitThrough::Tag);
+
+        let off = check_branch(
+            &vcs,
+            &changes.target,
+            changes.git.touches_repository(),
+            &branch_policy(Some(&["main"]), None),
+            BranchCheck::Skipped,
+        )
+        .unwrap()
+        .expect("a waived check still reports");
+
+        assert_eq!(off.branch.as_deref(), Some("feat/x"));
+        assert_eq!(off.allowed, ["main"]);
+        assert!(off.stable);
     }
 
     /// Composes a tagging change set with `style` and `message`.

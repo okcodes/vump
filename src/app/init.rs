@@ -213,6 +213,16 @@ fn render(files: &[String]) -> String {
         out,
         "# tag_style = \"annotated\"   # or \"lightweight\", or \"signed\""
     );
+    let _ = writeln!(out);
+    // Commented rather than filled in: which branch releases is policy, and
+    // whichever branch `init` happened to run from is an accident, not a
+    // declaration of one.
+    let _ = writeln!(
+        out,
+        "# Branches a release may be tagged from. Unset means any branch."
+    );
+    let _ = writeln!(out, "# release_branches = [\"main\"]");
+    let _ = writeln!(out, "# prerelease_branches = [\"main\"]");
 
     out
 }

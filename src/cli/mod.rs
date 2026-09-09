@@ -13,7 +13,7 @@ use clap::{Parser, Subcommand};
 use thiserror::Error;
 
 use crate::adapters::{GitCli, GitHubReleases, RealFileSystem, TerminalInteraction};
-use crate::app::change::{ChangeError, GitPlanning, Nesting};
+use crate::app::change::{BranchCheck, ChangeError, GitPlanning, Nesting};
 use crate::app::update::Channel;
 use crate::app::{self, AppError};
 use crate::config::{Config, ConfigError, GitThrough, TagStyle};
@@ -57,6 +57,13 @@ pub struct Cli {
     /// writing through it.
     #[arg(long, global = true)]
     allow_nested: bool,
+
+    /// Release from a branch the configuration does not list.
+    ///
+    /// Global because the branches a release may come from is a property of
+    /// the repository, not of the command that reaches a tag.
+    #[arg(long, global = true)]
+    any_branch: bool,
 }
 
 /// The operation to perform.
@@ -354,6 +361,7 @@ struct Context {
     config: Config,
     json: bool,
     project: Option<String>,
+    branch: BranchCheck,
 }
 
 fn execute(cli: &Cli) -> Result<Exit, CliError> {
@@ -395,6 +403,11 @@ fn execute(cli: &Cli) -> Result<Exit, CliError> {
         config,
         json: cli.json,
         project: cli.project.clone(),
+        branch: if cli.any_branch {
+            BranchCheck::Skipped
+        } else {
+            BranchCheck::Enforce
+        },
     };
 
     let pre = |label, args: &PreReleaseArgs| Transition::PreRelease {
@@ -538,9 +551,24 @@ fn interactive(ctx: &Context) -> Result<Exit, CliError> {
         .map(|(t, next)| (describe_transition(*t), next.to_string()))
         .collect();
     let index = ask.choose_transition(&base.to_string(), &labelled)?;
-    let (transition, _) = offered
+    let (transition, next) = offered
         .get(index)
         .ok_or(CliError::Interaction(InteractionError::Cancelled))?;
+
+    // Asked as soon as the target version is known, rather than after every
+    // remaining question: a run that is going to be refused must not collect
+    // answers first. With `through` unset the run counts as reaching git,
+    // because that is what it does unless the next question says otherwise.
+    let vcs = GitCli::new(&ctx.root);
+    if let Some(off) = app::change::check_branch(
+        &vcs,
+        next,
+        ctx.config.git.through.is_none_or(GitThrough::commits),
+        &ctx.config.git,
+        ctx.branch,
+    )? {
+        render::off_branch(&off);
+    }
 
     // How far to carry the release, asked only when configuration has not said.
     let through = match ctx.config.git.through {
@@ -569,7 +597,6 @@ fn interactive(ctx: &Context) -> Result<Exit, CliError> {
         return Ok(Exit::Success);
     }
 
-    let vcs = GitCli::new(&ctx.root);
     let outcome = app::change::apply(&ctx.fs, &vcs, &ctx.root, &plan.changes)?;
     render::applied(&plan.changes, &outcome, ctx.json);
 
@@ -658,12 +685,24 @@ fn bump(
         },
     )?;
 
+    // Before the dry run reports and before anything is written: a plan for a
+    // run that would be refused is not a plan.
+    let vcs = GitCli::new(&ctx.root);
+    if let Some(off) = app::change::check_branch(
+        &vcs,
+        &plan.changes.target,
+        plan.changes.git.touches_repository(),
+        &ctx.config.git,
+        ctx.branch,
+    )? {
+        render::off_branch(&off);
+    }
+
     if dry_run {
         render::plan(&plan.changes, ctx.json);
         return Ok(Exit::Success);
     }
 
-    let vcs = GitCli::new(&ctx.root);
     let outcome = app::change::apply(&ctx.fs, &vcs, &ctx.root, &plan.changes)?;
     render::applied(&plan.changes, &outcome, ctx.json);
 
@@ -706,6 +745,17 @@ fn set(ctx: &Context, version: &str, dry_run: bool, git_args: &GitArgs) -> Resul
         },
     )?;
 
+    let vcs = GitCli::new(&ctx.root);
+    if let Some(off) = app::change::check_branch(
+        &vcs,
+        &changes.target,
+        changes.git.touches_repository(),
+        &ctx.config.git,
+        ctx.branch,
+    )? {
+        render::off_branch(&off);
+    }
+
     if dry_run {
         render::plan(&changes, ctx.json);
         return Ok(Exit::Success);
@@ -719,7 +769,6 @@ fn set(ctx: &Context, version: &str, dry_run: bool, git_args: &GitArgs) -> Resul
         return Ok(Exit::Success);
     }
 
-    let vcs = GitCli::new(&ctx.root);
     let outcome = app::change::apply(&ctx.fs, &vcs, &ctx.root, &changes)?;
     render::applied(&changes, &outcome, ctx.json);
 
@@ -906,7 +955,9 @@ impl CliError {
                 ChangeError::Transition(_) => Exit::InvalidTransition,
                 ChangeError::OutOfSync { .. } => Exit::OutOfSync,
                 ChangeError::DirtyTree { .. } => Exit::DirtyTree,
-                ChangeError::NestedConfig { .. } => Exit::Config,
+                ChangeError::NestedConfig { .. }
+                | ChangeError::OffBranch { .. }
+                | ChangeError::DetachedHead => Exit::Config,
                 ChangeError::Vcs(_) => Exit::Git,
             },
         }

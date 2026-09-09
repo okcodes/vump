@@ -151,6 +151,45 @@ The reason not to rush: a crate inside this repository's tree is not inert the
 way an npm or C# project is. It would need excluding from the workspace, and a
 mistake there breaks `cargo build` for the tool itself.
 
+### A scriptable Interaction adapter
+
+`interactive()` constructs its own `TerminalInteraction`, so the guided run is
+reachable only through a real terminal. Every guard it applies — the nesting
+refusal, the release-branch check — is proven in the non-interactive paths and
+in unit tests, but the wiring *inside* the guided run has no test that would
+catch it being dropped. That is how the guided run went unguarded when
+release branches were first added.
+
+Shape: a `MemoryInteraction` beside `MemoryVcs` answering scripted choices, and
+`interactive()` taking `&dyn Interaction` rather than building one.
+
+Left out of the release-branch work because it changes the CLI entry point,
+which is a refactor with an argument of its own rather than a line in a feature.
+
+### Branch patterns in the release-branch lists
+
+`release_branches` and `prerelease_branches` match exact names. A repository
+maintaining several release lines — `release/1.x`, `release/2.x` — has to list
+each one and extend the list whenever a line opens. A single `*` would cover it.
+
+Left out of the first version because exact names cover `main`, `master` and
+`release`, which is what nearly every repository needs, and a pattern language
+is far easier to add than to narrow once written. semantic-release supports
+globs and regex in the same position; the regex half is the part worth not
+copying.
+
+### Per-identifier release branches
+
+Splitting branch policy three ways — `rc` from `release/*`, `beta` from
+`develop`, `alpha` from anywhere — rather than once, at stable versus
+pre-release.
+
+Considered while designing the two keys and left out. It triples the
+configuration surface to express a policy that is rare even in GitFlow shops,
+and the split that exists already covers the three arrangements people actually
+hold: stable locked with pre-releases free, both locked, and pre-releases locked
+alone. Worth reopening if someone names a repository that needs the third axis.
+
 ### Inputs on the check action
 
 The composite action takes `version`, `config` and `vump-version`. Passing a
