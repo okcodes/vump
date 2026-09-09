@@ -151,21 +151,6 @@ The reason not to rush: a crate inside this repository's tree is not inert the
 way an npm or C# project is. It would need excluding from the workspace, and a
 mistake there breaks `cargo build` for the tool itself.
 
-### A scriptable Interaction adapter
-
-`interactive()` constructs its own `TerminalInteraction`, so the guided run is
-reachable only through a real terminal. Every guard it applies — the nesting
-refusal, the release-branch check — is proven in the non-interactive paths and
-in unit tests, but the wiring *inside* the guided run has no test that would
-catch it being dropped. That is how the guided run went unguarded when
-release branches were first added.
-
-Shape: a `MemoryInteraction` beside `MemoryVcs` answering scripted choices, and
-`interactive()` taking `&dyn Interaction` rather than building one.
-
-Left out of the release-branch work because it changes the CLI entry point,
-which is a refactor with an argument of its own rather than a line in a feature.
-
 ### Branch patterns in the release-branch lists
 
 `release_branches` and `prerelease_branches` match exact names. A repository

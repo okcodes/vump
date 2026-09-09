@@ -433,6 +433,17 @@ would be refused is not a plan.
 belongs to no branch at all. Where no policy exists it is nobody's business but
 the caller's — the check is opt-in in both directions.
 
+**The guided run marks rather than refuses.** A bump the policy excludes is
+listed and marked, not dropped: an option that is simply missing is something
+to work out, whereas one shown as blocked explains itself. Choosing it asks
+again rather than proceeding. Where nothing at all is selectable there is no
+menu to show, so the refusal is raised directly. `--any-branch` brings the same
+bumps back marked — the flag restores the choice, it does not make it look
+safe. Every one of those answers comes from the same `check_branch` a
+non-interactive run uses, so the menu and the refusal cannot disagree, and the
+questioner is not trusted to honour the marking: a blocked bump returned anyway
+is refused by the rule.
+
 `--any-branch` proceeds anyway, and the run says what it waived. That notice is
 not the one [`BACKLOG.md`](BACKLOG.md) decided against: that entry rejected
 announcing which *source* a setting came from, a notice with nothing to do
@@ -608,8 +619,8 @@ src/
               Real filesystem, git via subprocess, terminal prompts,
               GitHub releases, and in-memory doubles for tests.
   app/        Use cases wiring ports together: Bump, Check, Status, Init,
-              Update, and locating configuration. The layer worth testing
-              hardest.
+              Update, the guided run, and locating configuration. The layer
+              worth testing hardest.
   cli/        clap definitions, adapter selection, output rendering.
 ```
 
@@ -625,6 +636,14 @@ Rules that keep the boundaries real:
   configuration does for itself. That is what lets discovery be exercised
   against an in-memory tree, and it keeps `config.rs` free of the I/O its own
   documentation says it has none of.
+- **The guided run is a use case, not a CLI detail.** It carries more
+  decisions than any other path and is the one most runs take, so it lives in
+  `app::guided` and reaches the terminal only through ports. Presentation does
+  not follow it down: the confirmation text and the name of each bump are
+  passed in as functions, so the use case decides what to ask and `cli` decides
+  how it reads. `Interaction::notice` exists for the same reason — a hazard
+  reported mid-run goes through the port rather than being printed from
+  underneath the abstraction.
 - A single `ChangeSet` value is the input to the human renderer, the JSON
   renderer, and `--dry-run` alike. Those three must not compute anything
   themselves. Bumping and setting differ only in how they reach a target
@@ -714,9 +733,13 @@ Three layers, each with a distinct job:
 
 1. **Domain unit tests.** Every transition in the §2 table, plus the refused
    ones. Pure functions, no fixtures, exhaustive.
-2. **Use-case tests** against in-memory port implementations. A fake VCS and a
-   fake filesystem let the whole bump flow be exercised — including git
-   side-effects and failure paths — without a real repository.
+2. **Use-case tests** against in-memory port implementations. A fake VCS, a
+   fake filesystem and a scripted `Interaction` let the whole bump flow be
+   exercised — including git side-effects, failure paths, and the guided run —
+   without a real repository or a terminal. `MemoryInteraction` answers from a
+   script and records every question, so what a run *asked* is assertable as
+   well as what it decided: a question the guided path should have answered for
+   itself is a defect a test can see.
 3. **End-to-end tests** driving the compiled binary against temporary
    directories, asserting on stdout, stderr, and exit codes. This layer owns
    the §4 interactivity contract and the §5 exit-code table: it is the only
