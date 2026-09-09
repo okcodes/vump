@@ -943,6 +943,25 @@ mod tests {
     }
 
     #[test]
+    fn every_menu_label_is_a_command_that_parses() {
+        // The menu's labels are the non-interactive equivalents, so a label
+        // that does not parse teaches an invocation that does not exist. That
+        // is invisible to every other test: the guided path never runs them.
+        for current in ["1.2.3", "1.2.3-alpha.0", "1.2.3-beta.1", "1.2.3-rc.2"] {
+            let version = current.parse().expect("a fixture version parses");
+            for (transition, _) in
+                crate::domain::bump::valid_transitions(&version).expect("the fixture is offerable")
+            {
+                let label = describe_transition(transition);
+                let argv = std::iter::once("vump").chain(label.split_whitespace());
+                Cli::try_parse_from(argv).unwrap_or_else(|e| {
+                    panic!("menu offers {label:?} from {current}, which does not parse: {e}")
+                });
+            }
+        }
+    }
+
+    #[test]
     fn global_flags_are_accepted_after_the_subcommand() {
         let cli = Cli::try_parse_from(["vump", "check", "1.0.0", "--json"]).unwrap();
         assert!(cli.json);
