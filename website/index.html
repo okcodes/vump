@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>vump — one version, every file, proven at the tag</title>
+    <meta
+      name="description"
+      content="vump keeps every version number in a repository in step, and fails the build before a tag that disagrees with its source can cost you anything."
+    />
+    <link rel="canonical" href="%VITE_SITE_URL%/" />
+
+    <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+    <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+    <meta name="theme-color" content="#0c0e12" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f7f7f8" media="(prefers-color-scheme: light)" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="vump" />
+    <meta property="og:title" content="vump — one version, every file, proven at the tag" />
+    <meta
+      property="og:description"
+      content="Keep every version number in a repository in step, and fail the build before a tag that disagrees with its source can cost you anything."
+    />
+    <meta property="og:url" content="%VITE_SITE_URL%/" />
+    <meta property="og:image" content="%VITE_SITE_URL%/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="vump — one version, every file, proven at the tag" />
+    <meta
+      name="twitter:description"
+      content="Keep every version number in a repository in step, and fail the build before a tag that disagrees with its source can cost you anything."
+    />
+    <meta name="twitter:image" content="%VITE_SITE_URL%/og.png" />
+
+    <script>
+      // Runs before first paint: a theme resolved in React would flash the wrong
+      // one first. An explicit choice wins over the system preference, and dark
+      // is the fallback when neither says anything.
+      (function () {
+        try {
+          var stored = localStorage.getItem('vump-theme');
+          var system = window.matchMedia('(prefers-color-scheme: light)').matches
+            ? 'light'
+            : 'dark';
+          document.documentElement.dataset.theme =
+            stored === 'light' || stored === 'dark' ? stored : system;
+        } catch (_) {
+          document.documentElement.dataset.theme = 'dark';
+        }
+      })();
+    </script>
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "vump",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "macOS, Linux, Windows",
+        "description": "Keep semver version numbers in sync across the files of a repository, and verify in CI that a released tag matches what is recorded in source.",
+        "url": "https://github.com/okcodes/vump",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
