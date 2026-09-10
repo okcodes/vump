@@ -45,8 +45,10 @@ jobs:
       - uses: pnpm/setup@v2
         with:
           # The version comes from website/package.json's packageManager field,
-          # so local development and this job cannot drift apart.
-          working-directory: website
+          # so local development and this job cannot drift apart. There is no
+          # package.json at the repository root to fall back on — this is a Rust
+          # project with a site in a subdirectory.
+          package-json-file: website/package.json
           install: false
 
       - uses: actions/setup-node@v7
