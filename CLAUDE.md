@@ -14,6 +14,7 @@ crate, ports and adapters.
 | [`BACKLOG.md`](BACKLOG.md) | What is not built yet, and what was decided against. |
 | [`README.md`](README.md) | The user-facing manual. |
 | [`sandbox/`](sandbox) | Working projects per ecosystem, to try by hand and to read as examples. |
+| [`website/`](website) | The landing page, and what its deployment still needs. Not part of the crate, and not versioned with it. |
 
 Before changing behavior, read the relevant `DESIGN.md` section. Before
 building something new, check `BACKLOG.md` — it may already be decided against,

@@ -1,0 +1,81 @@
+import { links } from '../content/links.ts';
+import { cn } from '../lib/cn.ts';
+import { useScrolled } from '../lib/hooks.ts';
+import { useLatestRelease } from '../lib/release.ts';
+import { GitHubIcon, Mark } from './ui/icons.tsx';
+import { ThemeToggle } from './ui/ThemeToggle.tsx';
+
+const SECTIONS = [
+  { href: '#defect', label: 'Why' },
+  { href: '#rule', label: 'The rule' },
+  { href: '#files', label: 'Files' },
+  { href: '#ci', label: 'CI' },
+  { href: '#install', label: 'Install' },
+];
+
+function ReleaseChip() {
+  const release = useLatestRelease();
+  if (!release) return null;
+
+  return (
+    <a
+      href={release.url}
+      target="_blank"
+      rel="noreferrer noopener"
+      title="The newest published release, read from GitHub as this page loaded"
+      className="border-line text-muted hover:border-line-strong hover:text-ink hidden items-center gap-2 rounded-full border px-3 py-1 font-mono text-[11px] transition-colors sm:inline-flex"
+    >
+      <span className="bg-signal h-1.5 w-1.5 rounded-full" aria-hidden />
+      {release.version}
+      {release.prerelease ? <span className="text-faint">pre</span> : null}
+    </a>
+  );
+}
+
+export function Nav() {
+  const scrolled = useScrolled();
+
+  return (
+    <header className="fixed inset-x-0 top-0 z-50">
+      <div
+        className={cn(
+          'border-b transition-colors duration-300',
+          scrolled ? 'border-line bg-ground/75 backdrop-blur-xl' : 'border-transparent',
+        )}
+      >
+        <div className="mx-auto flex h-16 w-full max-w-[78rem] items-center justify-between gap-6 px-6 md:px-10">
+          <a href="#top" className="text-ink flex items-center gap-2.5">
+            <Mark className="h-6 w-6" />
+            <span className="text-[15px] font-semibold tracking-[-0.02em]">vump</span>
+          </a>
+
+          <nav aria-label="Sections" className="hidden items-center gap-7 lg:flex">
+            {SECTIONS.map((section) => (
+              <a
+                key={section.href}
+                href={section.href}
+                className="text-muted hover:text-ink text-[13.5px] transition-colors"
+              >
+                {section.label}
+              </a>
+            ))}
+          </nav>
+
+          <div className="flex items-center gap-2.5">
+            <ReleaseChip />
+            <a
+              href={links.repo}
+              target="_blank"
+              rel="noreferrer noopener"
+              aria-label="vump on GitHub"
+              className="border-line text-muted hover:border-line-strong hover:text-ink inline-flex h-9 w-9 items-center justify-center rounded-full border transition-colors"
+            >
+              <GitHubIcon />
+            </a>
+            <ThemeToggle />
+          </div>
+        </div>
+      </div>
+    </header>
+  );
+}

@@ -6,6 +6,7 @@ dist/
 
 # Personal, machine-local agent settings
 .claude/settings.local.json
+.claude/launch.json
 
 # Sandbox build output. The projects are committed; what building them
 # produces is not.
