@@ -29,33 +29,6 @@ agreed, at which point it is ranked by value.
 
 Worth recording. None have an agreed problem statement yet.
 
-### A shared version for a .NET solution
-
-`Directory.Build.props` is where a solution with many projects usually keeps
-one `<Version>`, inherited by every project beneath it. Reading it needs no new
-code — it is the same `MSBuild` XML.
-
-What is undecided is what happens when a project underneath also declares its
-own `<Version>`, which overrides the inherited one. Tracking both would mean
-vump writing two files that disagree by design.
-
-The reason this waited — "needs a real solution in hand rather than a guess at
-which layer wins" — no longer holds. `sandbox/cs/multi-project` is a real
-solution, so which layer wins is a question `dotnet build` can be made to
-answer rather than one to reason about: add a `Directory.Build.props` carrying
-a `<Version>`, let one project beneath it declare its own, and read what each
-assembly ends up with.
-
-What that leaves is a design question rather than an unknown. Probably: track
-the props file *or* the projects, never both, and refuse a configuration
-declaring a project whose version an ancestor overrides — the same shape as
-refusing a manifest and lock that disagree.
-
-The versioning model itself was checked against .NET 10 and needs nothing new:
-`<Version>`, `<VersionPrefix>` and `<VersionSuffix>` are unchanged, and
-`Directory.Packages.props` centralizes *dependency* versions, which is a
-different file and not this.
-
 ### Deriving the version from git tags instead of files
 
 Tools like MinVer compute a .NET package version from the nearest git tag, so

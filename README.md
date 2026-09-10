@@ -218,6 +218,7 @@ order, indentation, and comments elsewhere in the file survive untouched.
 | --- | --- |
 | `package.json` | top-level `version` |
 | `*.csproj`, `*.fsproj`, `*.vbproj` | `<Version>` in a `<PropertyGroup>` |
+| `Directory.Build.props`, `Directory.Build.targets` | `<Version>` in a `<PropertyGroup>` |
 | `package-lock.json` | top-level `version`, and the root `packages` entry |
 | `Cargo.toml` | `[package].version` |
 | `Cargo.lock` | the `[[package]]` entry for this crate |
@@ -229,6 +230,27 @@ own, and neither is a locked dependency's. In a `.csproj`, neither is a
 never a pre-release), nor a `<VersionPrefix>`. Only `<Version>` moves, and a
 project file declaring it in two conditional groups is reported rather than
 guessed at.
+
+### .NET: which file holds the version
+
+Track whichever file declares `<Version>`. One project declares it in its own
+`.csproj`. Projects sharing a version declare it once above themselves, in a
+file MSBuild imports into every project beneath it:
+
+| File | Imported | Against a project's own `<Version>` |
+| --- | --- | --- |
+| `Directory.Build.props` | before the project | the project wins |
+| `Directory.Build.targets` | after the project | this file wins |
+
+So a props file sets the default a project may override, and a targets file
+overrides every project. Both are authored and committed like a `.csproj` — no
+build writes one — and MSBuild stops at the nearest one rather than merging
+several. `Directory.Solution.props` never reaches the projects and
+`Directory.Packages.props` holds dependency versions; neither is a version
+file.
+
+[`sandbox/cs/shared-version`](sandbox/cs/shared-version) is an executable and
+its library on one props file, to try by hand.
 
 ### Lock files move with the manifest
 

@@ -65,6 +65,13 @@ impl Tracked {
         match file_name {
             "package.json" => Some(Self::Manifest(Format::PackageJson)),
             "Cargo.toml" => Some(Self::Manifest(Format::CargoToml)),
+            // Authored and committed like any project file, neither generated:
+            // where a solution keeps one version for the projects beneath it.
+            // The pair differ in when MSBuild imports them, not in what they
+            // hold, so the same element is read from both.
+            "Directory.Build.props" | "Directory.Build.targets" => {
+                Some(Self::Manifest(Format::MsBuild))
+            }
             "VERSION" => Some(Self::Manifest(Format::PlainText)),
             // The only names recognized by extension rather than in full: an
             // MSBuild project is named after the assembly it builds.
@@ -96,7 +103,11 @@ impl Tracked {
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum VersionFileError {
     /// The filename is not one vump recognizes.
-    #[error("unsupported file {name:?}; expected package.json, Cargo.toml, Cargo.lock, or VERSION")]
+    #[error(
+        "unsupported file {name:?}; expected package.json, package-lock.json, Cargo.toml, \
+         Cargo.lock, VERSION, Directory.Build.props, Directory.Build.targets, or a \
+         .csproj, .fsproj or .vbproj project"
+    )]
     UnsupportedFile {
         /// The filename that could not be classified.
         name: String,
@@ -884,6 +895,28 @@ mod tests {
     }
 
     #[test]
+    fn the_unsupported_message_names_every_supported_form() {
+        // The message is the only place the supported set is written out for a
+        // reader, and nothing tied it to the set itself: it named four of six
+        // for two releases, telling .NET users their format was not supported.
+        let message = Tracked::require("nope.txt").unwrap_err().to_string();
+        for form in [
+            "package.json",
+            "package-lock.json",
+            "Cargo.toml",
+            "Directory.Build.props",
+            "Directory.Build.targets",
+            "Cargo.lock",
+            "VERSION",
+            ".csproj",
+            ".fsproj",
+            ".vbproj",
+        ] {
+            assert!(message.contains(form), "{form} missing from {message:?}");
+        }
+    }
+
+    #[test]
     fn detects_supported_filenames() {
         let manifest = |name| Tracked::detect(name);
         assert_eq!(
@@ -894,6 +927,18 @@ mod tests {
             manifest("Cargo.toml"),
             Some(Tracked::Manifest(Format::CargoToml))
         );
+        // Recognized in full, not by extension: a .props file is only a
+        // version file under this one name, which is the one MSBuild imports.
+        assert_eq!(
+            manifest("Directory.Build.props"),
+            Some(Tracked::Manifest(Format::MsBuild))
+        );
+        assert_eq!(
+            manifest("Directory.Build.targets"),
+            Some(Tracked::Manifest(Format::MsBuild))
+        );
+        assert_eq!(manifest("Other.props"), None);
+        assert_eq!(manifest("Other.targets"), None);
         assert_eq!(
             manifest("VERSION"),
             Some(Tracked::Manifest(Format::PlainText))
