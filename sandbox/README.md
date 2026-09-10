@@ -16,6 +16,7 @@ This is not test coverage. The suite in `tests/` and the fixtures in
 | [`cs/single-project`](cs/single-project) | `<Version>` in a `.csproj`, and what stays put around it |
 | [`cs/multi-project`](cs/multi-project) | Two C# projects versioned independently |
 | [`cs/shared-version`](cs/shared-version) | An executable and its library on one `Directory.Build.props` |
+| [`py/single-project`](py/single-project) | One Python project, `pyproject.toml` and `uv.lock` together |
 
 ## Git is off, deliberately
 
@@ -88,6 +89,15 @@ project below declares its own, so both inherit it and report the same number:
 cd sandbox/cs/shared-version
 vump minor --allow-nested            # rewrites one file, not two
 dotnet run --project App             # App 1.1.0 / Lib 1.1.0
+```
+
+For Python, the lock moves with the manifest and needs no network to do it —
+`uv lock` afterwards produces the same file vump already wrote:
+
+```bash
+cd sandbox/py/single-project
+vump minor --allow-nested            # pyproject.toml and uv.lock
+uv run python -m demo                # demo 1.1.0
 ```
 
 ## Putting it back

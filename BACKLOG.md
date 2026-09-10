@@ -26,23 +26,6 @@ agreed, at which point it is ranked by value.
 
 Each says what would settle it. Nothing moves up until something does.
 
-### Python projects
-
-`pyproject.toml` holds `[project].version`, which is the same in-place TOML
-edit vump already performs. What is undecided is `uv`, which is the tool that
-would be used here: it keeps a `uv.lock` recording the project's own version,
-so the lock question arrives with it.
-
-Settling it is an experiment, not a discussion, and the same one that settled
-npm and Cargo: put a project in `sandbox/py/`, bump the version by hand, run
-`uv lock`, and diff. If the only change is the project's own version, the lock
-is trackable on exactly the terms `Cargo.lock` and `package-lock.json` are —
-computable with no network and no knowledge of the dependency graph. If `uv`
-rewrites more than that, it is not, and `pyproject.toml` is tracked alone.
-
-Low priority by the only measure that matters here: barely any Python is
-written in this repository's orbit, so it waits behind formats that are.
-
 ### npm workspaces
 
 A Cargo workspace's shared lock is now written per member, matched by the
@@ -57,13 +40,16 @@ inference that produced the original lock-file defect.
 
 ### Declarative version-file formats
 
-Detection is by filename across the built-in formats. `pyproject.toml`,
-`*.csproj`, `gradle.properties` and others need a per-entry extraction spec — a
-path for structured formats, a pattern for the rest.
+Detection is by filename. Anything else — `gradle.properties`, a `*.gemspec`, a
+version in a shell script — would need a per-entry extraction spec: a path for
+structured formats, a pattern for the rest.
 
-The reason this has not been designed: it changes the configuration schema, and
-doing that well needs a real target format in hand rather than a guess at what
-would be general enough.
+Weaker than it looked. Both formats this entry once named as motivation,
+`pyproject.toml` and `*.csproj`, were added as built-ins instead, neither
+costing more than a day. A spec would change the configuration schema
+permanently to avoid work that keeps turning out to be small.
+
+What would settle it: a format someone needs that is not worth adding built-in.
 
 ### A Rust project in the sandbox
 

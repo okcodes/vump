@@ -224,6 +224,8 @@ order, indentation, and comments elsewhere in the file survive untouched.
 | `package-lock.json` | top-level `version`, and the root `packages` entry |
 | `Cargo.toml` | `[package].version` |
 | `Cargo.lock` | the `[[package]]` entry for this crate |
+| `pyproject.toml` | `[project].version` |
+| `uv.lock` | the `[[package]]` entry for this project |
 | `VERSION` | the whole file |
 
 A `version` nested under `dependencies` is never mistaken for the project's

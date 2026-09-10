@@ -90,6 +90,8 @@ builds. The three extensions are one language each and one format.
 | `package-lock.json` | JSON       | `.version`, and `.packages[""].version` |
 | `Cargo.toml`        | TOML       | `[package].version`                     |
 | `Cargo.lock`        | TOML       | the sole `[[package]]` with no `source` |
+| `pyproject.toml`    | TOML       | `[project].version`                     |
+| `uv.lock`           | TOML       | each `[[package]]` with an editable `source` |
 | `VERSION`           | plain text | entire file contents                    |
 
 **Writes must preserve the rest of the file byte-for-byte.** Update the version
@@ -128,10 +130,10 @@ formats come first.
 ### Lock files
 
 A lock file that records the project's own version is a version file by the
-definition above, and is tracked like any other. `Cargo.lock` and
-`package-lock.json` qualify: each records the version of the project it locks,
-and `cargo build --locked` and `npm ci` both reject a tree where a lock and its
-manifest disagree.
+definition above, and is tracked like any other. `Cargo.lock`,
+`package-lock.json` and `uv.lock` qualify: each records the version of the
+project it locks, and `cargo build --locked`, `npm ci` and `uv sync --locked`
+each reject a tree where a lock and its manifest disagree.
 
 This does not weaken the non-goal. Resolving dependencies is a package
 manager's job and vump never does it; restating a version vump has just written
@@ -148,10 +150,16 @@ In `Cargo.lock` the entries that belong to the repository are the
 everything it fetched. A single-crate repository has one, and it needs no
 naming.
 
+`uv.lock` is the same shape with the marker inverted: uv records a `source`
+for both, and the entries built from the tree are the ones marked `editable`.
+That distinction is load-bearing rather than cosmetic — a published release of
+a workspace member appears under the member's own name, and only the source
+says which of the two the tree builds.
+
 A workspace has one such entry per member, and the lock alone cannot say which
 of them a project means — so the manifests declared alongside it do. Each
-`Cargo.toml` names its package, and the entries a project writes are exactly
-the ones its own manifests name. That covers both shapes a workspace takes:
+`Cargo.toml` or `pyproject.toml` names its package, and the entries a project
+writes are exactly the ones its own manifests name. That covers both shapes a workspace takes:
 members held at one version declare every manifest in a single project and
 move together, while independently-versioned members declare one manifest each
 and touch only their own entry. Members that are not declared are not touched.
