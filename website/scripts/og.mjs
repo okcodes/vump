@@ -88,13 +88,13 @@ const card = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" 
   <text x="72" y="344" font-family="Instrument Sans" font-size="64" fill="${INK}"
         letter-spacing="-2.4">Every file.</text>
   <text x="72" y="416" font-family="Instrument Serif" font-style="italic" font-size="64"
-        fill="${SIGNAL}" letter-spacing="-1">Proven at the tag.</text>
+        fill="${SIGNAL}" letter-spacing="-1">One command.</text>
 
   <text x="72" y="486" font-family="Instrument Sans" font-size="23" fill="${MUTED}">
-    Keep every version number in a repository in step, and fail
+    Bump every file that records your version at once — then
   </text>
   <text x="72" y="518" font-family="Instrument Sans" font-size="23" fill="${MUTED}">
-    the build before a tag that disagrees with its source.
+    commit, tag, and verify the tag in CI.
   </text>
 
   <line x1="72" y1="566" x2="1128" y2="566" stroke="#ffffff" stroke-opacity="0.1" />
@@ -118,16 +118,22 @@ const card = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" 
 
 async function loadFonts() {
   const dir = await mkdtemp(join(tmpdir(), 'vump-og-'));
+  const paths = [];
 
-  const paths = await Promise.all(
-    FONTS.map(async (font) => {
-      const woff2 = await readFile(join(root, 'node_modules', font));
-      const ttf = Buffer.from(await wawoff2.decompress(woff2));
-      const path = join(dir, `${font.split('/').pop()?.replace('.woff2', '')}.ttf`);
-      await writeFile(path, ttf);
-      return path;
-    }),
-  );
+  // Strictly one at a time. The decompressor is a single emscripten module with
+  // its own heap, and overlapping calls hand back corrupted TrueType: the card
+  // then renders every line in whichever face survived, differently on each
+  // run. Awaiting in the loop is the fix, not the smell.
+  for (const font of FONTS) {
+    // oxlint-disable-next-line no-await-in-loop
+    const woff2 = await readFile(join(root, 'node_modules', font));
+    // oxlint-disable-next-line no-await-in-loop
+    const ttf = Buffer.from(await wawoff2.decompress(woff2));
+    const path = join(dir, `${font.split('/').pop()?.replace('.woff2', '')}.ttf`);
+    // oxlint-disable-next-line no-await-in-loop
+    await writeFile(path, ttf);
+    paths.push(path);
+  }
 
   return { dir, paths };
 }
