@@ -134,7 +134,7 @@ pub fn read_project_versions(
     root: &Path,
     project: &Project,
 ) -> Result<Vec<FileVersion>, AppError> {
-    let packages = cargo_package_names(fs, root, project.files.iter().map(String::as_str));
+    let packages = local_package_names(fs, root, project.files.iter().map(String::as_str));
     let mut versions = Vec::with_capacity(project.files.len());
 
     for declared in &project.files {
@@ -169,21 +169,28 @@ pub fn read_project_versions(
     Ok(versions)
 }
 
-/// The package names this project's Cargo manifests declare.
+/// The package names this project's manifests declare.
 ///
 /// A shared workspace lock records every member it builds, so the entries a
-/// project means are the ones its own manifests name. Manifests that cannot be
-/// read are skipped here and reported by the pass that reads their version.
-pub(crate) fn cargo_package_names<'a>(
+/// project means are the ones its own manifests name. Cargo and uv both work
+/// this way and are read together, since one project can hold both. Manifests
+/// that cannot be read are skipped here and reported by the pass that reads
+/// their version.
+pub(crate) fn local_package_names<'a>(
     fs: &dyn FileSystem,
     root: &Path,
     declared: impl IntoIterator<Item = &'a str>,
 ) -> Vec<String> {
     declared
         .into_iter()
-        .filter(|path| file_name_of(path) == "Cargo.toml")
-        .filter_map(|path| fs.read(&resolve(root, path)).ok())
-        .filter_map(|contents| version_file::cargo_package_name(&contents))
+        .filter_map(|path| {
+            let read = match file_name_of(path) {
+                "Cargo.toml" => version_file::cargo_package_name,
+                "pyproject.toml" => version_file::pyproject_package_name,
+                _ => return None,
+            };
+            read(&fs.read(&resolve(root, path)).ok()?)
+        })
         .collect()
 }
 
@@ -253,6 +260,7 @@ fn companion_locks(declared: &str) -> Option<(Vec<String>, LockFile)> {
     let (lock, format) = match name {
         "Cargo.toml" => ("Cargo.lock", LockFile::Cargo),
         "package.json" => ("package-lock.json", LockFile::Npm),
+        "pyproject.toml" => ("uv.lock", LockFile::Uv),
         _ => return None,
     };
 
@@ -388,8 +396,8 @@ mod tests {
     #[test]
     fn an_unsupported_filename_is_rejected_before_any_read() {
         let fs = MemoryFileSystem::new();
-        let err = read_project_versions(&fs, Path::new("/repo"), &project(&["pyproject.toml"]))
-            .unwrap_err();
+        let err =
+            read_project_versions(&fs, Path::new("/repo"), &project(&["setup.py"])).unwrap_err();
         assert!(matches!(
             err,
             AppError::VersionFile(VersionFileError::UnsupportedFile { .. })

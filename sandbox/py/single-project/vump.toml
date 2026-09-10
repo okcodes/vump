@@ -1,0 +1,16 @@
+# One Python project, manifest and lock moving together.
+#
+# uv.lock records the project's own version in the [[package]] entry whose
+# source is editable. Editing that entry is all a bump does — asking uv to
+# re-lock afterwards produces the same file, so the lock never needs the
+# network to be brought back in step.
+#
+# Git is off throughout the sandbox, and the tag pattern cannot be mistaken
+# for vump's own — see ../../npm/single-project/vump.toml.
+
+files = ["pyproject.toml", "uv.lock"]
+
+[git]
+through = "none"
+tag_pattern = "sandbox-py-v{new_version}"
+commit_message = "chore(sandbox): bump py/single-project to {new_version}"

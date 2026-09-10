@@ -12,3 +12,5 @@ dist/
 sandbox/**/bin/
 sandbox/**/obj/
 sandbox/**/node_modules/
+sandbox/**/.venv/
+sandbox/**/__pycache__/

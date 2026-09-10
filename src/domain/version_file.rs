@@ -26,6 +26,8 @@ pub enum Format {
     /// `MSBuild` project — `.csproj`, `.fsproj` or `.vbproj`; the version
     /// lives at `<Project><PropertyGroup><Version>`.
     MsBuild,
+    /// Python manifest; the version lives at `[project].version`.
+    PyProject,
     /// A file whose entire contents are the version.
     PlainText,
 }
@@ -45,6 +47,47 @@ pub enum LockFile {
     /// npm lock; the version at the top level and, from lockfile version 2,
     /// again under `packages[""]`.
     Npm,
+    /// uv lock; a `[[package]]` entry per package, those built from the
+    /// repository carrying an editable `source`.
+    Uv,
+}
+
+/// Every filename recognized in full, and what it is read as.
+///
+/// This is the only list: [`Tracked::detect`] matches against it and
+/// [`VersionFileError::UnsupportedFile`] names it, so a format cannot be
+/// supported without being offered to whoever spelled one wrong.
+///
+/// `Directory.Build.props` and `.targets` are authored and committed like a
+/// project file, neither generated; they differ in when `MSBuild` imports them,
+/// not in what they hold.
+const RECOGNIZED: &[(&str, Tracked)] = &[
+    ("package.json", Tracked::Manifest(Format::PackageJson)),
+    ("package-lock.json", Tracked::Lock(LockFile::Npm)),
+    ("Cargo.toml", Tracked::Manifest(Format::CargoToml)),
+    ("Cargo.lock", Tracked::Lock(LockFile::Cargo)),
+    ("pyproject.toml", Tracked::Manifest(Format::PyProject)),
+    ("uv.lock", Tracked::Lock(LockFile::Uv)),
+    ("Directory.Build.props", Tracked::Manifest(Format::MsBuild)),
+    (
+        "Directory.Build.targets",
+        Tracked::Manifest(Format::MsBuild),
+    ),
+    ("VERSION", Tracked::Manifest(Format::PlainText)),
+];
+
+/// The recognized names, as the refusal message lists them.
+fn recognized_names() -> String {
+    let names: Vec<&str> = RECOGNIZED.iter().map(|(name, _)| *name).collect();
+    let extensions: Vec<String> = MSBUILD_PROJECT_EXTENSIONS
+        .iter()
+        .map(|ext| format!(".{ext}"))
+        .collect();
+    format!(
+        "{}, or a {} project",
+        names.join(", "),
+        extensions.join("/")
+    )
 }
 
 /// A file vump tracks a version in.
@@ -62,29 +105,15 @@ impl Tracked {
     /// Returns `None` when the name is not one vump recognizes.
     #[must_use]
     pub fn detect(file_name: &str) -> Option<Self> {
-        match file_name {
-            "package.json" => Some(Self::Manifest(Format::PackageJson)),
-            "Cargo.toml" => Some(Self::Manifest(Format::CargoToml)),
-            // Authored and committed like any project file, neither generated:
-            // where a solution keeps one version for the projects beneath it.
-            // The pair differ in when MSBuild imports them, not in what they
-            // hold, so the same element is read from both.
-            "Directory.Build.props" | "Directory.Build.targets" => {
-                Some(Self::Manifest(Format::MsBuild))
-            }
-            "VERSION" => Some(Self::Manifest(Format::PlainText)),
-            // The only names recognized by extension rather than in full: an
-            // MSBuild project is named after the assembly it builds.
-            _ if MSBUILD_PROJECT_EXTENSIONS
-                .iter()
-                .any(|ext| has_extension(file_name, ext)) =>
-            {
-                Some(Self::Manifest(Format::MsBuild))
-            }
-            "Cargo.lock" => Some(Self::Lock(LockFile::Cargo)),
-            "package-lock.json" => Some(Self::Lock(LockFile::Npm)),
-            _ => None,
+        if let Some((_, tracked)) = RECOGNIZED.iter().find(|(name, _)| *name == file_name) {
+            return Some(*tracked);
         }
+        // The only names recognized by extension rather than in full: an
+        // MSBuild project is named after the assembly it builds.
+        MSBUILD_PROJECT_EXTENSIONS
+            .iter()
+            .any(|ext| has_extension(file_name, ext))
+            .then_some(Self::Manifest(Format::MsBuild))
     }
 
     /// Classifies a file by its name, erroring when it is not recognized.
@@ -103,11 +132,7 @@ impl Tracked {
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum VersionFileError {
     /// The filename is not one vump recognizes.
-    #[error(
-        "unsupported file {name:?}; expected package.json, package-lock.json, Cargo.toml, \
-         Cargo.lock, VERSION, Directory.Build.props, Directory.Build.targets, or a \
-         .csproj, .fsproj or .vbproj project"
-    )]
+    #[error("unsupported file {name:?}; expected {}", recognized_names())]
     UnsupportedFile {
         /// The filename that could not be classified.
         name: String,
@@ -185,6 +210,17 @@ pub enum VersionFileError {
         /// The file being read.
         file: String,
     },
+
+    /// The manifest declares its version dynamic, so a build backend computes
+    /// it and no version is recorded here to move.
+    #[error(
+        "{file} declares version in `dynamic`, so its build backend computes it; \
+         track the file that backend reads instead"
+    )]
+    DynamicVersion {
+        /// The file being read.
+        file: String,
+    },
 }
 
 impl Format {
@@ -193,7 +229,7 @@ impl Format {
     pub fn describe(self) -> &'static str {
         match self {
             Self::PackageJson => "JSON",
-            Self::CargoToml => "TOML",
+            Self::CargoToml | Self::PyProject => "TOML",
             Self::MsBuild => "XML",
             Self::PlainText => "plain text",
         }
@@ -206,6 +242,7 @@ impl Format {
             Self::PackageJson => "\"version\"",
             Self::CargoToml => "[package].version",
             Self::MsBuild => "<Version>",
+            Self::PyProject => "[project].version",
             Self::PlainText => "version",
         }
     }
@@ -230,6 +267,7 @@ impl Format {
                 contents[span].to_owned()
             }
             Self::CargoToml => read_cargo_version(file, contents)?,
+            Self::PyProject => read_pyproject_version(file, contents)?,
             Self::MsBuild => match find_msbuild_version(file, contents)? {
                 Some(span) => contents[span].to_owned(),
                 None => String::new(),
@@ -266,6 +304,7 @@ impl Format {
                 Ok(splice(contents, &[span], version))
             }
             Self::CargoToml => write_cargo_version(file, contents, version),
+            Self::PyProject => write_pyproject_version(file, contents, version),
             Self::MsBuild => {
                 let span = find_msbuild_version(file, contents)?.ok_or_else(|| {
                     VersionFileError::MissingField {
@@ -287,7 +326,7 @@ impl LockFile {
     #[must_use]
     pub fn field_description(self) -> &'static str {
         match self {
-            Self::Cargo => "[[package]].version",
+            Self::Cargo | Self::Uv => "[[package]].version",
             Self::Npm => "\"version\"",
         }
     }
@@ -305,7 +344,8 @@ impl LockFile {
         packages: &[String],
     ) -> Result<Version, VersionFileError> {
         let raw = match self {
-            Self::Cargo => read_cargo_lock_version(file, contents, packages)?,
+            Self::Cargo => read_cargo_lock_version(file, contents, packages, is_cargo_local)?,
+            Self::Uv => read_cargo_lock_version(file, contents, packages, is_uv_local)?,
             // An npm lock records only the root package until npm workspaces
             // are supported, so there is nothing yet for `packages` to select.
             Self::Npm => read_package_lock_version(file, contents)?,
@@ -329,7 +369,10 @@ impl LockFile {
         packages: &[String],
     ) -> Result<String, VersionFileError> {
         match self {
-            Self::Cargo => write_cargo_lock_version(file, contents, version, packages),
+            Self::Cargo => {
+                write_cargo_lock_version(file, contents, version, packages, is_cargo_local)
+            }
+            Self::Uv => write_cargo_lock_version(file, contents, version, packages, is_uv_local),
             Self::Npm => write_package_lock_version(file, contents, version),
         }
     }
@@ -544,6 +587,84 @@ fn read_cargo_version(file: &str, contents: &str) -> Result<String, VersionFileE
         })
 }
 
+/// Reads `[project].version` from a Python manifest.
+fn read_pyproject_version(file: &str, contents: &str) -> Result<String, VersionFileError> {
+    let doc = parse_cargo(file, contents)?;
+
+    let project = doc
+        .get("project")
+        .and_then(toml_edit::Item::as_table_like)
+        .ok_or_else(|| VersionFileError::MissingField {
+            file: file.to_owned(),
+            field: "[project]".to_owned(),
+        })?;
+
+    // PEP 621: a name listed in `dynamic` is supplied by the build backend, and
+    // declaring it in both places is invalid, so there is nothing here to move.
+    let dynamic = project
+        .get("dynamic")
+        .and_then(toml_edit::Item::as_array)
+        .is_some_and(|names| names.iter().any(|n| n.as_str() == Some("version")));
+    if dynamic {
+        return Err(VersionFileError::DynamicVersion {
+            file: file.to_owned(),
+        });
+    }
+
+    project
+        .get("version")
+        .and_then(toml_edit::Item::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| VersionFileError::MissingField {
+            file: file.to_owned(),
+            field: "[project].version".to_owned(),
+        })
+}
+
+/// Rewrites `[project].version`, preserving the rest of the document.
+fn write_pyproject_version(
+    file: &str,
+    contents: &str,
+    version: &Version,
+) -> Result<String, VersionFileError> {
+    // Reading first rejects manifests with no writable version — a dynamic or
+    // absent one — before any mutation is attempted.
+    read_pyproject_version(file, contents)?;
+
+    let mut doc = parse_cargo(file, contents)?;
+    let slot =
+        doc["project"]["version"]
+            .as_value_mut()
+            .ok_or_else(|| VersionFileError::MissingField {
+                file: file.to_owned(),
+                field: "[project].version".to_owned(),
+            })?;
+
+    // Assigning through the existing value keeps its surrounding whitespace and
+    // any trailing comment on the line.
+    let decor = slot.decor().clone();
+    *slot = toml_edit::Value::from(version.to_string());
+    *slot.decor_mut() = decor;
+
+    Ok(doc.to_string())
+}
+
+/// Reads the package name a Python manifest declares.
+///
+/// This is what pairs a manifest with its entry in a shared uv workspace lock,
+/// exactly as [`cargo_package_name`] does for Cargo.
+#[must_use]
+pub fn pyproject_package_name(contents: &str) -> Option<String> {
+    contents
+        .parse::<DocumentMut>()
+        .ok()?
+        .get("project")?
+        .as_table_like()?
+        .get("name")?
+        .as_str()
+        .map(str::to_owned)
+}
+
 /// Reads the package name a Cargo manifest declares.
 ///
 /// This is what pairs a manifest with its entry in a shared workspace lock.
@@ -656,9 +777,10 @@ fn read_cargo_lock_version(
     file: &str,
     contents: &str,
     packages: &[String],
+    is_local: IsLocal,
 ) -> Result<String, VersionFileError> {
     let doc = parse_cargo(file, contents)?;
-    let entries = local_packages(file, &doc, packages)?;
+    let entries = local_packages(file, &doc, packages, is_local)?;
 
     let mut versions = entries.iter().map(|entry| entry.version.as_str());
     let first = versions.next().unwrap_or_default().to_owned();
@@ -680,13 +802,14 @@ fn write_cargo_lock_version(
     contents: &str,
     version: &Version,
     packages: &[String],
+    is_local: IsLocal,
 ) -> Result<String, VersionFileError> {
     // Reading first rejects a lock naming none of the project's packages, or
     // recording them inconsistently, before any mutation is attempted.
-    read_cargo_lock_version(file, contents, packages)?;
+    read_cargo_lock_version(file, contents, packages, is_local)?;
 
     let mut doc = parse_cargo(file, contents)?;
-    let indexes: Vec<usize> = local_packages(file, &doc, packages)?
+    let indexes: Vec<usize> = local_packages(file, &doc, packages, is_local)?
         .iter()
         .map(|entry| entry.index)
         .collect();
@@ -719,6 +842,27 @@ fn write_cargo_lock_version(
     Ok(doc.to_string())
 }
 
+/// Decides whether a `[[package]]` entry was built from the working tree.
+///
+/// The two TOML locks agree on everything but this: Cargo records a `source`
+/// for what it fetched and none for what it built, while uv records one for
+/// both and marks the local ones editable.
+type IsLocal = fn(&toml_edit::Table) -> bool;
+
+/// Cargo records a `source` only for packages it fetched.
+fn is_cargo_local(table: &toml_edit::Table) -> bool {
+    table.get("source").is_none()
+}
+
+/// uv records `source = { editable = "<path>" }` for packages in the tree, and
+/// `{ registry = "..." }` for everything it fetched.
+fn is_uv_local(table: &toml_edit::Table) -> bool {
+    table
+        .get("source")
+        .and_then(toml_edit::Item::as_inline_table)
+        .is_some_and(|source| source.contains_key("editable"))
+}
+
 /// One `[[package]]` entry that belongs to the project being versioned.
 struct LocalPackage {
     index: usize,
@@ -736,6 +880,7 @@ fn local_packages(
     file: &str,
     doc: &DocumentMut,
     packages: &[String],
+    is_local: IsLocal,
 ) -> Result<Vec<LocalPackage>, VersionFileError> {
     if packages.is_empty() {
         return Err(VersionFileError::UnidentifiedLock {
@@ -761,7 +906,7 @@ fn local_packages(
     let selected: Vec<LocalPackage> = tables
         .iter()
         .enumerate()
-        .filter(|(_, table)| table.get("source").is_none())
+        .filter(|(_, table)| is_local(table))
         .filter(|(_, table)| field(table, "name").is_some_and(|name| packages.contains(&name)))
         .map(|(index, table)| LocalPackage {
             index,
@@ -895,25 +1040,14 @@ mod tests {
     }
 
     #[test]
-    fn the_unsupported_message_names_every_supported_form() {
-        // The message is the only place the supported set is written out for a
-        // reader, and nothing tied it to the set itself: it named four of six
-        // for two releases, telling .NET users their format was not supported.
-        let message = Tracked::require("nope.txt").unwrap_err().to_string();
-        for form in [
-            "package.json",
-            "package-lock.json",
-            "Cargo.toml",
-            "Directory.Build.props",
-            "Directory.Build.targets",
-            "Cargo.lock",
-            "VERSION",
-            ".csproj",
-            ".fsproj",
-            ".vbproj",
-        ] {
-            assert!(message.contains(form), "{form} missing from {message:?}");
+    fn an_unrecognized_name_is_offered_the_alternatives() {
+        // Detection and this message read one list, so they cannot disagree.
+        // What is still worth asserting is that the message reaches the reader.
+        let message = Tracked::require("setup.py").unwrap_err().to_string();
+        for (name, _) in RECOGNIZED {
+            assert!(message.contains(name), "{name} missing from {message:?}");
         }
+        assert!(message.contains(".csproj"), "{message:?}");
     }
 
     #[test]
@@ -943,7 +1077,11 @@ mod tests {
             manifest("VERSION"),
             Some(Tracked::Manifest(Format::PlainText))
         );
-        assert_eq!(Tracked::detect("pyproject.toml"), None);
+        assert_eq!(
+            manifest("pyproject.toml"),
+            Some(Tracked::Manifest(Format::PyProject))
+        );
+        assert_eq!(manifest("uv.lock"), Some(Tracked::Lock(LockFile::Uv)));
         // Detection is exact; casing is not normalized.
         assert_eq!(Tracked::detect("cargo.toml"), None);
     }
@@ -1344,6 +1482,156 @@ dependencies = [
     }
 
     /// Cargo's own output for a two-member workspace. See `testdata/README.md`.
+    const PYPROJECT: &str = "\
+[project]
+name = \"demo\"
+version = \"1.2.3\"   # released from CI
+requires-python = \">=3.11\"
+dependencies = [\"idna>=3.6\"]
+";
+
+    /// One editable entry for the project, one registry entry for a dependency
+    /// — the shape `uv lock` produces for a single project.
+    const UV_LOCK: &str = "\
+version = 1
+revision = 3
+
+[[package]]
+name = \"demo\"
+version = \"1.2.3\"
+source = { editable = \".\" }
+
+[[package]]
+name = \"idna\"
+version = \"3.19\"
+source = { registry = \"https://pypi.org/simple\" }
+";
+
+    #[test]
+    fn reads_pyproject_toml() {
+        assert_eq!(
+            Format::PyProject.read("pyproject.toml", PYPROJECT).unwrap(),
+            v("1.2.3")
+        );
+    }
+
+    #[test]
+    fn writing_a_pyproject_keeps_the_comment_on_the_line() {
+        let out = Format::PyProject
+            .write("pyproject.toml", PYPROJECT, &v("2.0.0-rc.1"))
+            .unwrap();
+        assert!(
+            out.contains("version = \"2.0.0-rc.1\"   # released from CI"),
+            "{out}"
+        );
+        assert!(out.contains("dependencies = [\"idna>=3.6\"]"), "{out}");
+    }
+
+    #[test]
+    fn a_version_the_build_backend_computes_is_refused() {
+        // PEP 621: naming `version` in `dynamic` means a backend supplies it,
+        // and declaring it in both places is invalid — so there is nothing
+        // here to move, and guessing at where it lives is not vump's job.
+        let src = "[project]\nname = \"demo\"\ndynamic = [\"version\"]\n";
+        let err = Format::PyProject.read("pyproject.toml", src).unwrap_err();
+        assert!(
+            matches!(err, VersionFileError::DynamicVersion { .. }),
+            "{err:?}"
+        );
+        assert!(
+            Format::PyProject
+                .write("pyproject.toml", src, &v("2.0.0"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_uv_lock_records_the_project_and_not_its_dependencies() {
+        assert_eq!(
+            LockFile::Uv.read("uv.lock", UV_LOCK, &demo()).unwrap(),
+            v("1.2.3")
+        );
+
+        // idna is at 3.19 in the same file and must not move.
+        let out = LockFile::Uv
+            .write("uv.lock", UV_LOCK, &v("1.3.0"), &demo())
+            .unwrap();
+        assert!(
+            out.contains("name = \"demo\"\nversion = \"1.3.0\""),
+            "{out}"
+        );
+        assert!(out.contains("name = \"idna\"\nversion = \"3.19\""), "{out}");
+    }
+
+    #[test]
+    fn a_registry_copy_of_the_project_is_left_alone() {
+        // The name filter alone cannot tell these apart: a workspace member and
+        // a published release of the same package both appear as `demo`. Only
+        // the editable source says which one the working tree builds.
+        let lock = "\
+version = 1
+
+[[package]]
+name = \"demo\"
+version = \"1.2.3\"
+source = { editable = \".\" }
+
+[[package]]
+name = \"demo\"
+version = \"0.9.0\"
+source = { registry = \"https://pypi.org/simple\" }
+";
+        assert_eq!(
+            LockFile::Uv.read("uv.lock", lock, &demo()).unwrap(),
+            v("1.2.3")
+        );
+
+        let out = LockFile::Uv
+            .write("uv.lock", lock, &v("1.3.0"), &demo())
+            .unwrap();
+        assert!(
+            out.contains("version = \"1.3.0\"\nsource = { editable"),
+            "{out}"
+        );
+        assert!(
+            out.contains("version = \"0.9.0\"\nsource = { registry"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_uv_workspace_member_is_selected_by_name() {
+        // Members share one lock and are keyed by name, as Cargo's are, so a
+        // project writes only the entries its own manifests declare.
+        let lock = "\
+version = 1
+
+[[package]]
+name = \"api\"
+version = \"2.0.0\"
+source = { editable = \"packages/api\" }
+
+[[package]]
+name = \"core\"
+version = \"2.0.0\"
+source = { editable = \"packages/core\" }
+";
+        let api = names(&["api"]);
+        assert_eq!(
+            LockFile::Uv.read("uv.lock", lock, &api).unwrap(),
+            v("2.0.0")
+        );
+
+        let out = LockFile::Uv
+            .write("uv.lock", lock, &v("2.1.0"), &api)
+            .unwrap();
+        assert!(out.contains("name = \"api\"\nversion = \"2.1.0\""), "{out}");
+        assert!(
+            out.contains("name = \"core\"\nversion = \"2.0.0\""),
+            "{out}"
+        );
+    }
+
     const WORKSPACE: &str = include_str!("testdata/cargo-workspace.lock");
 
     /// The package the single-crate lock fixture was generated for.
