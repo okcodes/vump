@@ -41,7 +41,7 @@ export function Code({ code, lang, title, emphasis, className, copyable = true }
         </div>
       ) : null}
 
-      <pre className="overflow-x-auto py-3 font-mono text-[12.5px] leading-[1.8] sm:text-[13px]">
+      <pre className="flex-1 overflow-x-auto py-3 font-mono text-[12.5px] leading-[1.8] sm:text-[13px]">
         <code>
           {lines.map((tokens, index) => {
             const highlighted = marked.has(index + 1);

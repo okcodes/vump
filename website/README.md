@@ -4,9 +4,9 @@ The landing page for [vump](https://github.com/okcodes/vump). One page, built
 to static files and destined for GitHub Pages.
 
 ```bash
-npm install
-npm run dev          # http://localhost:5173
-npm run check        # typecheck, lint, format, build — what CI will run
+pnpm install
+pnpm dev             # http://localhost:5173
+pnpm check           # typecheck, lint, format, build — what CI will run
 ```
 
 | Script                    | Does                                                          |
@@ -24,17 +24,27 @@ npm run check        # typecheck, lint, format, build — what CI will run
 
 | Path                       | Holds                                                                                                                   |
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `src/content/`             | Every fact the page states: terminal runs, tracked files, version rules, exit codes, links. Nothing here renders.       |
-| `src/components/sections/` | One file per numbered section, in page order.                                                                           |
+| `src/content/`             | Every fact the page states: terminal runs, tracked files, snippets, links. Nothing here renders.                        |
+| `src/components/sections/` | One file per section, in page order.                                                                                    |
 | `src/components/ui/`       | The primitives: terminal pane, code block, section frame, reveal, buttons.                                              |
 | `src/lib/`                 | Hooks and the two small engines — a segment model for command output, and a highlighter for the four snippet languages. |
 | `src/index.css`            | The whole design system: palette, type, motion.                                                                         |
 | `scripts/og.mjs`           | Renders the social card from the same values, offline.                                                                  |
 
-**Content is separate from layout on purpose.** Every terminal pane on the page
-reproduces what the binary actually prints — the marks, the column alignment,
-the wording of the errors. When vump's output changes, `src/content/runs.ts` is
-the only file to revisit.
+## What this page is for
+
+It introduces vump to someone who has never seen it: what it does, whether it
+handles their files, and how to start. That is all.
+
+**It does not restate the documentation.** No flag tables, no exit codes, no
+configuration reference, no design rationale — those live in the repository and
+are linked from here. Anything copied onto this page is a second copy to keep
+true, and the page is not worth that.
+
+**Content is separate from layout on purpose.** Every terminal pane reproduces
+what the binary actually prints — the marks, the column alignment, the wording
+of the errors. When vump's output changes, `src/content/runs.ts` is the only
+file to revisit.
 
 **The page states no version number.** The release chip fetches the newest
 release from the GitHub API as the page loads, and renders nothing when that
@@ -53,8 +63,8 @@ Terminal surfaces are held dark in both themes. Rendered command output should
 read as output, not as a styled quotation.
 
 The accent is spent on one thing: what changed. A new version number, a passing
-mark, a highlighted line in a snippet. Amber marks a refusal, red a failure, and
-nothing else is coloured at all.
+mark, a highlighted line in a snippet. Red marks a failure, and nothing else is
+coloured at all.
 
 ## Lint configuration
 
@@ -115,13 +125,14 @@ jobs:
         working-directory: website
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: website/package-lock.json
-      - run: npm ci
-      - run: npm run check
+          cache: pnpm
+          cache-dependency-path: website/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
       - uses: actions/upload-pages-artifact@v3
         with:
           path: website/dist

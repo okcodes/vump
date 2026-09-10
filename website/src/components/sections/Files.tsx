@@ -1,7 +1,8 @@
 import { useRef, useState, type KeyboardEvent } from 'react';
 
 import { TRACKED_FILES } from '../../content/files.ts';
-import { repairRun } from '../../content/runs.ts';
+import { MULTI_PROJECT_CONFIG } from '../../content/rules.ts';
+import { statusRun } from '../../content/runs.ts';
 import { cn } from '../../lib/cn.ts';
 import { Code } from '../ui/Code.tsx';
 import { Reveal } from '../ui/Reveal.tsx';
@@ -29,10 +30,9 @@ export function Files() {
   return (
     <Section
       id="files"
-      index="03"
-      eyebrow="What it writes"
-      title="Nine files. One number. Nothing else touched."
-      lede="Files are recognized by name, and a rewrite changes the version and nothing more — key order, indentation, and comments elsewhere in the file survive untouched. Pick one to see exactly which line moves."
+      eyebrow="Works with"
+      title="Your files, changed one line at a time."
+      lede="Files are recognized by name — no configuration beyond listing them. Only the version moves: formatting, key order and comments stay exactly where they were."
     >
       <div className="grid gap-6 lg:grid-cols-12">
         <Reveal className="lg:col-span-4">
@@ -82,63 +82,39 @@ export function Files() {
             id="file-panel"
             role="tabpanel"
             aria-labelledby={`file-tab-${file.name}`}
-            className="flex h-full min-w-0 flex-col gap-4"
+            className="h-full"
           >
-            <Code code={file.code} lang={file.lang} title={file.name} emphasis={file.emphasis} />
-
-            <div className="border-line grid gap-4 rounded-xl border p-5 sm:grid-cols-2">
-              <div>
-                <p className="label">Version lives in</p>
-                <p className="text-ink mt-2 font-mono text-[13px] leading-relaxed">{file.where}</p>
-              </div>
-              <div>
-                <p className="label">Never mistaken for it</p>
-                <p className="text-muted mt-2 text-sm leading-relaxed">{file.guard}</p>
-              </div>
-            </div>
-
-            <p className="text-faint text-xs leading-relaxed">
-              <code className="font-mono">.fsproj</code> and{' '}
-              <code className="font-mono">.vbproj</code> are read exactly like{' '}
-              <code className="font-mono">.csproj</code>, and{' '}
-              <code className="font-mono">Directory.Build.targets</code> like{' '}
-              <code className="font-mono">Directory.Build.props</code> — except that a targets file
-              overrides a project’s own version, where a props file only supplies a default.
-            </p>
+            <Code
+              code={file.code}
+              lang={file.lang}
+              title={file.name}
+              emphasis={file.emphasis}
+              className="h-full"
+            />
           </div>
         </Reveal>
       </div>
 
-      <div className="mt-16 grid gap-8 lg:grid-cols-12 lg:gap-10">
-        <Reveal className="lg:col-span-6">
-          <h3 className="text-xl font-medium tracking-[-0.02em]">
-            Lock files move with the manifest
-          </h3>
-          <p className="text-muted mt-4 leading-relaxed">
-            <code className="text-ink font-mono text-[13px]">Cargo.lock</code> and{' '}
-            <code className="text-ink font-mono text-[13px]">package-lock.json</code> record their
-            project’s own version, and{' '}
-            <code className="text-ink font-mono text-[13px]">cargo build --locked</code> and{' '}
-            <code className="text-ink font-mono text-[13px]">npm ci</code> both reject a tree where
-            a lock and its manifest disagree. vump writes them in the same run, so nothing is left
-            to finish afterwards. If a lock file records your version but is missing from the
-            configuration, it stops before writing anything and names it.
-          </p>
-          <p className="text-faint mt-4 text-sm leading-relaxed">
-            This is not vump running a package manager, which it never does. The test is whether the
-            result can be computed with no network and no knowledge of the dependency graph.
-          </p>
-        </Reveal>
+      <Reveal delay={80}>
+        <div className="border-line mt-14 grid items-center gap-8 rounded-xl border p-6 lg:grid-cols-12 lg:gap-10 lg:p-8">
+          <div className="lg:col-span-5">
+            <h3 className="text-xl font-medium tracking-[-0.02em]">
+              Monorepos, project by project
+            </h3>
+            <p className="text-muted mt-3 leading-relaxed">
+              Name each project in <code className="text-ink font-mono text-[13px]">vump.toml</code>{' '}
+              and they version independently, from anywhere in the repository.
+            </p>
+            <div className="mt-5">
+              <Code code={MULTI_PROJECT_CONFIG} lang="toml" title="vump.toml" />
+            </div>
+          </div>
 
-        <Reveal delay={80} className="lg:col-span-6">
-          <h3 className="text-xl font-medium tracking-[-0.02em]">And when they disagree</h3>
-          <p className="text-muted mt-4 mb-5 leading-relaxed">
-            A bump requires the tracked files to agree, and refuses when they do not — a source of
-            truth contradicting itself is something to look at, not to guess about.
-          </p>
-          <Terminal lines={repairRun} title="repair" animate />
-        </Reveal>
-      </div>
+          <div className="lg:col-span-7">
+            <Terminal lines={statusRun} title="~/monorepo" animate />
+          </div>
+        </div>
+      </Reveal>
     </Section>
   );
 }

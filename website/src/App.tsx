@@ -1,14 +1,10 @@
 import { Footer } from './components/Footer.tsx';
 import { Nav } from './components/Nav.tsx';
 import { Ci } from './components/sections/Ci.tsx';
-import { Defect } from './components/sections/Defect.tsx';
+import { Features } from './components/sections/Features.tsx';
 import { Files } from './components/sections/Files.tsx';
 import { Hero } from './components/sections/Hero.tsx';
-import { Install } from './components/sections/Install.tsx';
-import { Projects } from './components/sections/Projects.tsx';
-import { Rule } from './components/sections/Rule.tsx';
-import { Safety } from './components/sections/Safety.tsx';
-import { Versions } from './components/sections/Versions.tsx';
+import { Start } from './components/sections/Start.tsx';
 
 export function App() {
   return (
@@ -22,14 +18,10 @@ export function App() {
       <Nav />
       <main>
         <Hero />
-        <Defect />
-        <Rule />
+        <Features />
         <Files />
-        <Versions />
         <Ci />
-        <Projects />
-        <Safety />
-        <Install />
+        <Start />
       </main>
       <Footer />
     </>
