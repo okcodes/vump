@@ -22,8 +22,9 @@ changed.
 
 ## The rules that are easiest to get wrong
 
-Each is stated in full, with its reasoning and a worked example, in
-[`ENGINEERING.md`](ENGINEERING.md).
+Each is stated in full, with its reasoning and a worked example, where the
+table above says it lives — the code standards in [`ENGINEERING.md`](ENGINEERING.md),
+the design rules in [`DESIGN.md`](DESIGN.md).
 
 - **A type says what a value means.** If a field's meaning depends on which
   caller produced it, the type is wrong. An `Option` is genuine absence, never
@@ -44,6 +45,8 @@ Each is stated in full, with its reasoning and a worked example, in
   or hardware sits on a contributor's machine, or how anyone's credentials are
   held belongs in a file that ships with it.
 - **A fixed bug arrives with the test that would have caught it.**
+- **A document earns its length.** Record the reasoning — the constraint, the
+  measurement, the option rejected — never the investigation that reached it.
 
 ## Before pushing
 
@@ -86,11 +89,6 @@ much faster than waiting for a runner to report the same thing.
   pull request — the moment it is noticed is the only moment its reasoning is
   cheap to write down. The option that is not available is noticing and doing
   neither.
-- **A document earns its length.** These files are read by people and agents
-  with limited attention, and a page nobody finishes protects nothing. Prefer
-  deleting a stale paragraph to appending a correct one; when a finding is
-  worth keeping, write the finding, not the investigation. Length is not
-  thoroughness — it is the cost the next reader pays.
 - **Say plainly what is left for a human to do**, including anything that was
   deliberately left out.
 - **Push back.** Honest recommendations are wanted, including for removing

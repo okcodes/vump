@@ -96,29 +96,11 @@ the CI check action and in-place self-update both resolve them.
 
 ## Where things get written down
 
-Keeping the documents true is part of the change, not follow-up work.
-
-| Document | Update it when |
-| --- | --- |
-| [`DESIGN.md`](DESIGN.md) | Behavior or architecture changes — in the same pull request |
-| [`README.md`](README.md) | The user-facing surface changes |
-| [`BACKLOG.md`](BACKLOG.md) | Something is proposed, deferred, or ruled out |
-| [`ENGINEERING.md`](ENGINEERING.md) | A standard changes, together with the example that motivated it |
-| [`CLAUDE.md`](CLAUDE.md) | The document map or the conventions in it change |
-| [`sandbox/`](sandbox) | A new ecosystem or configuration shape is supported |
+Keeping the documents true is part of the change, not follow-up work: whichever
+document [`CLAUDE.md`](CLAUDE.md) says holds a thing is updated in the same
+pull request that changes it. How `DESIGN.md` and `BACKLOG.md` divide between
+them is stated in [`BACKLOG.md`](BACKLOG.md), where it is needed.
 
 The sandbox projects share this repository, so every `vump.toml` in them keeps
 git off: a commit or tag made there lands here. Git behavior is covered by the
 end-to-end suite, which builds a throwaway repository per test.
-
-Two rules keep `DESIGN.md` and `BACKLOG.md` from drifting into each other:
-
-- `DESIGN.md` describes what is true **now**. It is authoritative: where it and
-  the code disagree, one of them is defective and the disagreement gets
-  resolved deliberately rather than by assuming the code is right.
-- `BACKLOG.md` holds only what is **not** settled. When an item is built, its
-  rules move into `DESIGN.md` and the backlog entry is deleted — an entry
-  describing shipped behavior is a second, competing specification.
-
-**Decided against** entries exist so a question is not reopened without new
-information. Reopening one is fine; say what changed.
