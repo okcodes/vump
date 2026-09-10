@@ -241,9 +241,8 @@ refusal names.
 `[[project]]` is the answer to "this repository holds several things that
 version separately." **A second `vump.toml` deeper in the same repository is
 not a supported alternative; it is the mistake `[[project]]` exists to
-prevent.** Nothing rejects it outright — discovery finds the nearest
-configuration and uses it — but a repository shaped that way has given up every
-property this design is built on:
+prevent.** A repository shaped that way has given up every property this
+design is built on:
 
 - Projects can no longer be addressed by name, so `--project` does nothing and
   every bump requires standing in the right directory first.
@@ -542,6 +541,8 @@ vump self list            List published releases
 | `--json`            | global          | Machine-readable output                        |
 | `--channel <name>`  | `self`          | Least mature kind of release to accept         |
 | `--to <version>`    | `self update`   | Install this exact version, newer or older     |
+| `--force`           | `init`          | Overwrite an existing configuration            |
+| `--limit <n>`       | `self list`     | Show at most this many releases, newest first  |
 
 Both replace the `[git]` setting of the same name for one run. There is no
 escape hatch to keep separate from them, because `--through none` *is* the
