@@ -110,7 +110,7 @@ export function Files() {
             </div>
           </div>
 
-          <div className="lg:col-span-7">
+          <div className="min-w-0 lg:col-span-7">
             <Terminal lines={statusRun} title="~/monorepo" animate />
           </div>
         </div>
