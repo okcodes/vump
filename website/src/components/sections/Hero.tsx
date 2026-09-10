@@ -28,22 +28,24 @@ export function Hero() {
                 <br />
                 Every file.
                 <br />
-                <span className="font-display text-signal italic">Proven at the tag.</span>
+                <span className="font-display text-signal italic">One command.</span>
               </h1>
             </Reveal>
 
             <Reveal delay={120}>
-              <p className="text-muted mt-7 max-w-[54ch] text-lg leading-relaxed">
-                vump moves every version number a repository records in lockstep, then fails the
-                build before a tag that disagrees with its source can cost you anything.
+              <p className="text-muted mt-7 max-w-[52ch] text-lg leading-relaxed">
+                vump writes your new version into <code className="text-ink">package.json</code>,{' '}
+                <code className="text-ink">Cargo.toml</code>,{' '}
+                <code className="text-ink">pyproject.toml</code> and their lock files at once — then
+                commits, tags, and verifies the tag in CI.
               </p>
             </Reveal>
 
             <Reveal delay={180}>
               <div className="mt-9 flex flex-wrap items-center gap-3">
-                <Button href="#install">Install vump</Button>
-                <Button href={links.readme} variant="outline" external>
-                  Read the manual
+                <Button href="#start">Get started</Button>
+                <Button href={links.repo} variant="outline" external>
+                  View on GitHub
                   <ArrowIcon className="opacity-60" />
                 </Button>
               </div>
@@ -58,10 +60,10 @@ export function Hero() {
         </div>
       </div>
 
-      <Reveal className="mt-20 md:mt-28">
+      <Reveal className="mt-20 md:mt-24">
         <div className="border-line border-t">
           <div className="mx-auto flex w-full max-w-[78rem] flex-col gap-3 px-6 py-5 md:flex-row md:items-center md:gap-8 md:px-10">
-            <span className="label shrink-0">Reads and writes</span>
+            <span className="label shrink-0">Knows these files</span>
             <div className="text-muted flex flex-wrap items-center gap-x-5 gap-y-2 font-mono text-[12.5px]">
               {TRACKED_FILES.map((file) => (
                 <span key={file.name} className="whitespace-nowrap">

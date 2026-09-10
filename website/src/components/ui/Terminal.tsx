@@ -9,7 +9,6 @@ const TONES: Record<Tone, string> = {
   ink: 'text-term-ink',
   muted: 'text-term-muted',
   signal: 'text-term-signal',
-  warn: 'text-term-warn',
   danger: 'text-term-danger',
 };
 

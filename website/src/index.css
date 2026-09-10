@@ -159,6 +159,20 @@
   }
 }
 
+@layer base {
+  /*
+   * Grid and flex items default to min-width:auto: they refuse to shrink below
+   * their content. One holding a horizontally scrolling pane — a terminal, a
+   * snippet, the file strip — therefore sizes its track to the pane's full
+   * width and drags the document, fixed masthead included, wider than the
+   * screen. Every layout here wants the opposite, and opting in per item means
+   * one forgotten class reintroduces the bug.
+   */
+  :where(.grid, .flex) > * {
+    min-width: 0;
+  }
+}
+
 @layer components {
   /* Section numbers, field labels, table headers: the instrument's own voice. */
   .label {

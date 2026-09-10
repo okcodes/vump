@@ -6,11 +6,10 @@ import { GitHubIcon, Mark } from './ui/icons.tsx';
 import { ThemeToggle } from './ui/ThemeToggle.tsx';
 
 const SECTIONS = [
-  { href: '#defect', label: 'Why' },
-  { href: '#rule', label: 'The rule' },
+  { href: '#features', label: 'What it does' },
   { href: '#files', label: 'Files' },
   { href: '#ci', label: 'CI' },
-  { href: '#install', label: 'Install' },
+  { href: '#start', label: 'Quick start' },
 ];
 
 function ReleaseChip() {

@@ -7,7 +7,7 @@
  * that matters (the version that changed) instead of on the whole line.
  */
 
-export type Tone = 'ink' | 'muted' | 'signal' | 'warn' | 'danger';
+export type Tone = 'ink' | 'muted' | 'signal' | 'danger';
 
 export interface Seg {
   text: string;
@@ -30,8 +30,6 @@ export const t = seg('ink');
 export const dim = seg('muted');
 /** The accent. Reserved for what changed, and for a passing mark. */
 export const sig = seg('signal');
-/** A waived guard or a caution. */
-export const caution = seg('warn');
 /** A refusal or a failing mark. */
 export const bad = seg('danger');
 
