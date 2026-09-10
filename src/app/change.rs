@@ -525,7 +525,7 @@ pub fn apply(
     // The same pairing the read side uses: a shared workspace lock records
     // every member, and this project's manifests say which entries are its own.
     let packages =
-        crate::app::cargo_package_names(fs, root, changes.files.iter().map(|f| f.path.as_str()));
+        crate::app::local_package_names(fs, root, changes.files.iter().map(|f| f.path.as_str()));
 
     let mut written = Vec::with_capacity(changes.files.len());
     for file in &changes.files {

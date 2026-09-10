@@ -74,7 +74,7 @@ pub fn discover(fs: &dyn FileSystem, root: &Path) -> Vec<String> {
 
     // A lock file's entries are identified by the manifests declared with it,
     // so every manifest has to be in hand before anything can be judged.
-    let packages = crate::app::cargo_package_names(fs, root, found.iter().map(String::as_str));
+    let packages = crate::app::local_package_names(fs, root, found.iter().map(String::as_str));
 
     found.retain(|path| readable(fs, root, path, &packages));
     found
