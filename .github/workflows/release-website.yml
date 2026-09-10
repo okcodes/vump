@@ -9,7 +9,6 @@ on:
   push:
     tags:
       - 'website-v[0-9]*'
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -29,7 +28,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # Unlike release.yml, this uses the composite action rather than the
       # build in this checkout. What is being verified here is the website's
