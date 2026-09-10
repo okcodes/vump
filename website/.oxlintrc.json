@@ -1,13 +1,6 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": [
-    "react",
-    "typescript",
-    "oxc",
-    "jsx-a11y",
-    "import",
-    "promise"
-  ],
+  "plugins": ["react", "typescript", "oxc", "jsx-a11y", "import", "promise"],
   "categories": {
     "correctness": "error",
     "suspicious": "error",
@@ -27,10 +20,7 @@
     "eslint/no-console": [
       "error",
       {
-        "allow": [
-          "warn",
-          "error"
-        ]
+        "allow": ["warn", "error"]
       }
     ],
     "react/react-in-jsx-scope": "off",
@@ -40,8 +30,5 @@
     "react/no-array-index-key": "off",
     "import/max-dependencies": "off"
   },
-  "ignorePatterns": [
-    "dist",
-    "node_modules"
-  ]
+  "ignorePatterns": ["dist", "node_modules"]
 }
