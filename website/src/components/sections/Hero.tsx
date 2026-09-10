@@ -8,7 +8,7 @@ import { Terminal } from '../ui/Terminal.tsx';
 
 export function Hero() {
   return (
-    <section id="top" className="relative overflow-hidden pt-32 pb-16 md:pt-44 md:pb-24">
+    <section id="top" className="relative overflow-hidden pt-32 md:pt-44">
       <div className="grid-backdrop pointer-events-none absolute inset-0 -z-10" aria-hidden />
       <div
         className="pointer-events-none absolute -top-64 left-1/2 -z-10 h-[38rem] w-[64rem] -translate-x-1/2 rounded-full bg-[radial-gradient(closest-side,var(--glow),transparent)]"
@@ -59,7 +59,7 @@ export function Hero() {
       </div>
 
       <Reveal className="mt-20 md:mt-28">
-        <div className="border-line border-y">
+        <div className="border-line border-t">
           <div className="mx-auto flex w-full max-w-[78rem] flex-col gap-3 px-6 py-5 md:flex-row md:items-center md:gap-8 md:px-10">
             <span className="label shrink-0">Reads and writes</span>
             <div className="text-muted flex flex-wrap items-center gap-x-5 gap-y-2 font-mono text-[12.5px]">

@@ -37,7 +37,7 @@ interface Props {
  */
 export function Terminal({ lines, title, animate = false, copy, className }: Props) {
   const reduced = useReducedMotion();
-  const { ref, inView } = useInView<HTMLDivElement>('-20% 0px -20% 0px');
+  const { ref, inView } = useInView<HTMLDivElement>('0px 0px -15% 0px');
   const playing = animate && !reduced && inView;
   const [typed, setTyped] = useState(() => ({ line: 0, char: 0 }));
   const cursor = playing ? typed : { line: lines.length, char: 0 };

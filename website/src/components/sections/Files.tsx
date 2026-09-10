@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState, type KeyboardEvent } from 'react';
 
 import { TRACKED_FILES } from '../../content/files.ts';
 import { repairRun } from '../../content/runs.ts';
@@ -10,6 +10,19 @@ import { Terminal } from '../ui/Terminal.tsx';
 
 export function Files() {
   const [selected, setSelected] = useState(0);
+  const tabs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    const step = event.key === 'ArrowDown' || event.key === 'ArrowRight' ? 1 : 0;
+    const back = event.key === 'ArrowUp' || event.key === 'ArrowLeft' ? -1 : 0;
+    if (!step && !back) return;
+
+    event.preventDefault();
+    const next = (selected + step + back + TRACKED_FILES.length) % TRACKED_FILES.length;
+    setSelected(next);
+    tabs.current[next]?.focus();
+  };
+
   const file = TRACKED_FILES[selected] ?? TRACKED_FILES[0];
   if (!file) return null;
 
@@ -26,6 +39,7 @@ export function Files() {
           <div
             role="tablist"
             aria-label="Supported files"
+            aria-orientation="vertical"
             className="border-line bg-raised/40 flex gap-1 overflow-x-auto rounded-xl border p-1.5 lg:flex-col lg:overflow-visible"
           >
             {TRACKED_FILES.map((entry, index) => (
@@ -33,8 +47,15 @@ export function Files() {
                 key={entry.name}
                 type="button"
                 role="tab"
+                id={`file-tab-${entry.name}`}
                 aria-selected={index === selected}
+                aria-controls="file-panel"
+                tabIndex={index === selected ? 0 : -1}
+                ref={(node) => {
+                  tabs.current[index] = node;
+                }}
                 onClick={() => setSelected(index)}
+                onKeyDown={onKeyDown}
                 className={cn(
                   'flex shrink-0 items-baseline justify-between gap-4 rounded-lg px-3.5 py-2.5 text-left transition-colors lg:shrink',
                   index === selected
@@ -57,7 +78,12 @@ export function Files() {
         </Reveal>
 
         <Reveal delay={60} className="lg:col-span-8">
-          <div className="flex h-full min-w-0 flex-col gap-4">
+          <div
+            id="file-panel"
+            role="tabpanel"
+            aria-labelledby={`file-tab-${file.name}`}
+            className="flex h-full min-w-0 flex-col gap-4"
+          >
             <Code code={file.code} lang={file.lang} title={file.name} emphasis={file.emphasis} />
 
             <div className="border-line grid gap-4 rounded-xl border p-5 sm:grid-cols-2">
@@ -70,6 +96,15 @@ export function Files() {
                 <p className="text-muted mt-2 text-sm leading-relaxed">{file.guard}</p>
               </div>
             </div>
+
+            <p className="text-faint text-xs leading-relaxed">
+              <code className="font-mono">.fsproj</code> and{' '}
+              <code className="font-mono">.vbproj</code> are read exactly like{' '}
+              <code className="font-mono">.csproj</code>, and{' '}
+              <code className="font-mono">Directory.Build.targets</code> like{' '}
+              <code className="font-mono">Directory.Build.props</code> — except that a targets file
+              overrides a project’s own version, where a props file only supplies a default.
+            </p>
           </div>
         </Reveal>
       </div>

@@ -15,6 +15,12 @@
 *.cs        text eol=lf
 *.csproj    text eol=lf
 *.js        text eol=lf
+*.mjs       text eol=lf
+*.ts        text eol=lf
+*.tsx       text eol=lf
+*.css       text eol=lf
+*.html      text eol=lf
+*.svg       text eol=lf
 
 # The sandbox exists to be read and experimented with, not to describe what
 # this repository is written in.

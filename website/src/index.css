@@ -14,7 +14,7 @@
   --raised-2: oklch(0.212 0.009 264);
   --ink: oklch(0.965 0.004 264);
   --muted: oklch(0.73 0.008 264);
-  --faint: oklch(0.56 0.01 264);
+  --faint: oklch(0.62 0.01 264);
   --line: oklch(1 0 0 / 0.08);
   --line-strong: oklch(1 0 0 / 0.17);
   --signal: oklch(0.845 0.145 168);
@@ -23,6 +23,7 @@
   --warn: oklch(0.81 0.13 78);
   --danger: oklch(0.7 0.185 22);
   --glow: oklch(0.845 0.145 168 / 0.1);
+  --grid: oklch(1 0 0 / 0.05);
   --grain: 0.05;
 }
 
@@ -33,7 +34,7 @@
   --raised-2: oklch(0.972 0.003 264);
   --ink: oklch(0.21 0.012 264);
   --muted: oklch(0.46 0.011 264);
-  --faint: oklch(0.6 0.011 264);
+  --faint: oklch(0.52 0.011 264);
   --line: oklch(0.21 0.012 264 / 0.12);
   --line-strong: oklch(0.21 0.012 264 / 0.24);
   --signal: oklch(0.54 0.125 168);
@@ -42,6 +43,7 @@
   --warn: oklch(0.56 0.125 62);
   --danger: oklch(0.53 0.195 25);
   --glow: oklch(0.54 0.125 168 / 0.07);
+  --grid: oklch(0.21 0.012 264 / 0.055);
   --grain: 0.025;
 }
 
@@ -202,8 +204,8 @@
   /* Hairline grid, faded out towards the edges so it never reads as a border. */
   .grid-backdrop {
     background-image:
-      linear-gradient(to right, var(--line) 1px, transparent 1px),
-      linear-gradient(to bottom, var(--line) 1px, transparent 1px);
+      linear-gradient(to right, var(--grid) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--grid) 1px, transparent 1px);
     background-size: 64px 64px;
     mask-image: radial-gradient(ellipse 100% 70% at 50% 0%, black 20%, transparent 78%);
   }

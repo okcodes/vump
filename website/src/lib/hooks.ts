@@ -5,14 +5,29 @@ import { useCallback, useEffect, useRef, useState } from 'react';
  * it has. Everything on this page enters once; nothing animates on the way out,
  * because content that moves when you scroll back up is harder to read, not
  * more alive.
+ *
+ * Only the bottom edge is inset, so entering is held back until an element is
+ * properly on screen. Insetting the top as well leaves a dead band under the
+ * masthead where anything already in view on load never reveals at all.
  */
-export function useInView<T extends HTMLElement>(rootMargin = '-12% 0px -12% 0px') {
+export function useInView<T extends HTMLElement>(rootMargin = '0px 0px -10% 0px') {
   const ref = useRef<T | null>(null);
   const [inView, setInView] = useState(false);
 
   useEffect(() => {
     const node = ref.current;
     if (!node || inView) return;
+
+    // Anything already on screen when it mounts is answered from geometry on a
+    // timer rather than from the observer. An observer only reports during a
+    // rendering update, so a tab that is throttled or not yet painted can hold
+    // its first callback indefinitely, and a page whose content is hidden until
+    // that callback arrives would stay blank. The timer also lets the first
+    // frame paint at rest, so what is already in view fades in rather than
+    // appearing finished.
+    const timer = window.setTimeout(() => {
+      if (node.getBoundingClientRect().top < window.innerHeight) setInView(true);
+    }, 60);
 
     const observer = new IntersectionObserver(
       (entries) => {
@@ -25,7 +40,10 @@ export function useInView<T extends HTMLElement>(rootMargin = '-12% 0px -12% 0px
     );
 
     observer.observe(node);
-    return () => observer.disconnect();
+    return () => {
+      window.clearTimeout(timer);
+      observer.disconnect();
+    };
   }, [inView, rootMargin]);
 
   return { ref, inView };
