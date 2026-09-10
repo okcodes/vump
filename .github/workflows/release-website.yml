@@ -1,0 +1,77 @@
+name: Release website
+
+# The website's own release line, independent of the binary's (see
+# release.yml). A `website-v*` tag deploys the landing page — copy, layout, a
+# newly advertised release — without publishing a vump version or implying one
+# to anybody pinning it. The two tag shapes never collide: this one does not
+# start with `v`.
+on:
+  push:
+    tags:
+      - 'website-v[0-9]*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  # A deploy in flight is left to finish. Cancelling one does not undo it; it
+  # just leaves Pages serving a half-known state.
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # Unlike release.yml, this uses the composite action rather than the
+      # build in this checkout. What is being verified here is the website's
+      # own version against the pushed tag, not the binary being released, so
+      # there is no regression a freshly built vump would catch that a
+      # published one would not — and a Rust toolchain and a two-minute build
+      # would otherwise be dragged into a job that deploys static files.
+      - name: Check tag matches the website version
+        uses: okcodes/vump/.github/actions/check@main
+        with:
+          version: ${{ github.ref_name }}
+
+      - uses: pnpm/setup@v2
+        with:
+          # The version comes from website/package.json's packageManager field,
+          # so local development and this job cannot drift apart.
+          working-directory: website
+          install: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '26'
+
+      # The committed lockfile is the deploy's declared input. Nothing is
+      # resolved, pinned or discovered at deploy time — a build of this commit
+      # produces the same bytes today and next month.
+      - name: Install
+        working-directory: website
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        working-directory: website
+        run: pnpm run build
+        env:
+          VITE_WEBSITE_BUILD_SHA: ${{ github.sha }}
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: website/dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

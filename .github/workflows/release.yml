@@ -3,7 +3,10 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      # Digit-anchored so a tag that merely starts with v — `voldemort`, a
+      # branch-shaped name — cannot start a release. `website-v*` does not
+      # match either, which is what keeps the two release lines apart.
+      - 'v[0-9]*'
 
 permissions:
   contents: write  # needed to create GitHub releases and upload assets
