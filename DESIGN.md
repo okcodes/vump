@@ -241,9 +241,8 @@ refusal names.
 `[[project]]` is the answer to "this repository holds several things that
 version separately." **A second `vump.toml` deeper in the same repository is
 not a supported alternative; it is the mistake `[[project]]` exists to
-prevent.** Nothing rejects it outright — discovery finds the nearest
-configuration and uses it — but a repository shaped that way has given up every
-property this design is built on:
+prevent.** A repository shaped that way has given up every property this
+design is built on:
 
 - Projects can no longer be addressed by name, so `--project` does nothing and
   every bump requires standing in the right directory first.
@@ -263,22 +262,17 @@ only because those projects exist to be run against by hand. They are the
 exception that shows the cost: each has to name its own tag and commit so that
 neither can be mistaken for a release of vump.
 
-Treat "how do I make per-directory configurations work" as a question with a
-different answer: one `vump.toml`, several `[[project]]` entries.
-
 **Acting on a nested configuration is refused**, naming both files and pointing
 at `[[project]]`. Both are named in full: a path relative to the other starts
 partway down the tree whenever a third configuration is involved, and reads as
 if it started at the top. An absolute path needs no frame, so there is no frame
-for a reader to guess at. Nesting is decided by continuing the discovery walk past the
-configuration it stopped at: if another `vump.toml` lies above, the one in
-effect is shadowing it. That is the same walk, asked one directory higher, so
-the check can never disagree with the resolution it is checking — and it needs
-no notion of a repository, which is why a directory holding its own `.git`
-makes no difference to the answer. Refused rather than warned, for the
-same reason a release publishing no checksums is: a warning is visible in a
-guided run and useless everywhere else, and by the time one is printed about a
-pushed tag the tag is on the remote.
+for a reader to guess at. Nesting is decided by continuing the discovery walk one directory higher: if
+another `vump.toml` lies above, the one in effect is shadowing it. Being the
+same walk, the check cannot disagree with the resolution it is checking, and it
+needs no notion of a repository — a directory holding its own `.git` makes no
+difference. Refused rather than warned, for the reason a release publishing no
+checksums is: by the time a warning is printed about a pushed tag, the tag is
+on the remote.
 
 `--allow-nested` proceeds anyway. It is a flag rather than a setting in the
 nested file deliberately. A setting would answer the question once and stay
@@ -289,10 +283,8 @@ standing needs. Its inconvenience is the point rather than a cost: it is a
 standing reminder that `[[project]]` is going unused, and the way to stop typing
 it is to restructure the configuration rather than to keep typing it.
 
-That places it outside the rule above about a flag mirroring a setting. This is
-not a preference with a default worth overriding, but an acknowledgement of a
-hazard already detected — the same shape as `vump init --force`, which is also a
-flag and would gain nothing from being spelled in a file.
+It is not a preference with a default worth overriding, which is why it has no
+matching setting — the same shape as `vump init --force`.
 
 **Every command touching a project is refused, reading included.** The hazard
 is not writing but operating on the wrong configuration at all, and `check` is
@@ -542,6 +534,8 @@ vump self list            List published releases
 | `--json`            | global          | Machine-readable output                        |
 | `--channel <name>`  | `self`          | Least mature kind of release to accept         |
 | `--to <version>`    | `self update`   | Install this exact version, newer or older     |
+| `--force`           | `init`          | Overwrite an existing configuration            |
+| `--limit <n>`       | `self list`     | Show at most this many releases, newest first  |
 
 Both replace the `[git]` setting of the same name for one run. There is no
 escape hatch to keep separate from them, because `--through none` *is* the
@@ -685,10 +679,10 @@ Rules that keep the boundaries real:
 - **git** is invoked as a subprocess rather than through a library. This
   inherits the user's real git configuration, credential helpers, hooks, and
   SSH setup for free, and keeps the dependency surface small.
-- **Interaction** has two implementations: a terminal one, and one that returns
-  an error for every question. Non-interactive mode is enforced by construction
-  — it is given the erroring implementation, so a prompt cannot leak into a
-  scripted run even by accident.
+- **Interaction** has three implementations: a terminal one, one that returns
+  an error for every question, and a scripted one for tests. Non-interactive
+  mode is enforced by construction — it is given the erroring implementation,
+  so a prompt cannot leak into a scripted run even by accident.
 - **Self-update** replaces the running binary. On Unix an atomic rename works
   even while executing; on Windows the running executable must be renamed aside
   first, then replaced. That platform difference is delegated to a library
@@ -700,12 +694,9 @@ Rules that keep the boundaries real:
   signing, since signing rewrites the macOS binary and a digest taken earlier
   would describe an artifact nobody receives.
 
-  A release publishing no checksums is refused rather than installed with a
-  warning. This is the highest-privilege path in the project — it downloads a
-  binary and then runs it as the user, and in CI inside a job holding signing
-  secrets — and a warning on that path is not a safeguard. The cost is that
-  releases predating checksums cannot be installed by `self update`, which is
-  accepted.
+  A release publishing no checksums is refused, not installed with a warning.
+  The cost — releases predating checksums cannot be installed by `self update`
+  — is accepted; the reasoning is [`ENGINEERING.md`](ENGINEERING.md) §3.
 
   Read-only commands (`self status`, `self list`) download nothing and so
   require nothing to verify.
@@ -719,12 +710,9 @@ Rules that keep the boundaries real:
   of band cannot carry a valid one, and there is no long-lived key to store,
   rotate or leak.
 
-  Verification is available to anyone — `gh attestation verify <file> --repo
-  okcodes/vump` — but is not what the tooling enforces. Checksums are, because
-  they need only `curl` and a hash utility, whereas checking an attestation
-  needs a recent `gh`. Requiring it would trade the CI action's portability,
-  including onto self-hosted runners, for a guarantee that publishing alone
-  already makes available to those who want it.
+  Anyone can verify one — `gh attestation verify <file> --repo okcodes/vump` —
+  but the tooling enforces checksums instead, for the portability reason in
+  [`BACKLOG.md`](BACKLOG.md).
 
 - **Release discovery** reads the full release list rather than the endpoint
   that returns only the latest non-pre-release, because that endpoint answers

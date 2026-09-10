@@ -15,9 +15,6 @@ things that could have been done in the pull request that found them — an entr
 reading "rename this" or "this comment is stale" costs more to file and re-read
 than to fix.
 
-An entry is ready to build when its *Problem* is agreed. The *Shape* is a
-starting point, not a specification — expect it to change while building.
-
 ---
 
 ## Ready to build
@@ -27,25 +24,7 @@ agreed, at which point it is ranked by value.
 
 ## Ideas, not yet decided
 
-Worth recording. None have an agreed problem statement yet.
-
-### Deriving the version from git tags instead of files
-
-Tools like MinVer compute a .NET package version from the nearest git tag, so
-no file records it and nothing can fall out of sync.
-
-Not adopted, and not a competitor so much as the opposite trade. It needs git
-history at build time, which shallow CI checkouts and source tarballs do not
-have; it leaves a checked-out tree with no readable version; and it does not
-reach npm or Cargo, whose manifests must carry a version regardless — so a
-polyglot repository would need both models at once. Most of all it removes the
-second opinion: a mistyped tag becomes a correctly-built wrong version, with
-nothing left to check it against, which is the failure `vump check` exists to
-catch.
-
-Worth revisiting only for a repository that is .NET alone and does not publish
-source archives. `vump set "$(git describe --tags --abbrev=0)"` already covers
-deriving a version from a tag for anyone who wants that direction.
+Each says what would settle it. Nothing moves up until something does.
 
 ### Python projects
 
@@ -86,28 +65,6 @@ The reason this has not been designed: it changes the configuration schema, and
 doing that well needs a real target format in hand rather than a guess at what
 would be general enough.
 
-### Enforcing provenance verification, not just publishing it
-
-Releases carry a signed provenance attestation, and anyone can check it with
-`gh attestation verify`. Nothing in the tooling *requires* that check: the CI
-action and self-update both enforce checksums instead.
-
-The reason is portability, not doubt about the value. Checksums need only
-`curl` and a hash utility, both present anywhere the action runs, self-hosted
-runners included. Verifying an attestation needs a recent `gh`, and verifying
-one from `vump self update` would need a Sigstore implementation in Rust — the
-crates are immature — or shelling out to `gh`, which a user's machine may not
-have.
-
-Worth revisiting if the Rust Sigstore ecosystem matures, or if the action's
-consumers are known to have `gh` available.
-
-### Remembering an update channel
-
-`--channel` is per-invocation. Someone tracking release candidates types it
-every time. Persisting it needs installation-level state — a config directory
-vump otherwise has no need for — which one setting does not obviously justify.
-
 ### A Rust project in the sandbox
 
 The sandbox covers npm and C#. Rust is missing, and the argument at the time
@@ -123,30 +80,6 @@ test fixtures.
 The reason not to rush: a crate inside this repository's tree is not inert the
 way an npm or C# project is. It would need excluding from the workspace, and a
 mistake there breaks `cargo build` for the tool itself.
-
-### Branch patterns in the release-branch lists
-
-`release_branches` and `prerelease_branches` match exact names. A repository
-maintaining several release lines — `release/1.x`, `release/2.x` — has to list
-each one and extend the list whenever a line opens. A single `*` would cover it.
-
-Left out of the first version because exact names cover `main`, `master` and
-`release`, which is what nearly every repository needs, and a pattern language
-is far easier to add than to narrow once written. semantic-release supports
-globs and regex in the same position; the regex half is the part worth not
-copying.
-
-### Per-identifier release branches
-
-Splitting branch policy three ways — `rc` from `release/*`, `beta` from
-`develop`, `alpha` from anywhere — rather than once, at stable versus
-pre-release.
-
-Considered while designing the two keys and left out. It triples the
-configuration surface to express a policy that is rare even in GitFlow shops,
-and the split that exists already covers the three arrangements people actually
-hold: stable locked with pre-releases free, both locked, and pre-releases locked
-alone. Worth reopening if someone names a repository that needs the third axis.
 
 ### Inputs on the check action
 
@@ -180,15 +113,6 @@ Not to be confused with a prompt between tagging and pushing, which was
 considered and rejected: a blocking prompt owns the terminal, so it cannot
 deliver the inspection it appears to offer. Stopping at `tag` and looking
 around with a free shell is strictly better.
-
-### Per-project commit messages
-
-`commit_message` accepts `{project}`, which distinguishes a monorepo's commits.
-Whether a project also needs to *override* the whole message, as it can with
-`tag_pattern`, has no motivating case yet: tags must be unique, commit messages
-need not be.
-
----
 
 ### Deciding the bump from commit messages
 
@@ -243,109 +167,108 @@ and no forge.
 
 ### A `-y` / `--auto-approve` flag
 
-Naming a subcommand already means vump never prompts, so a subcommand
-invocation *is* the confirmation — the same reason `rm file` needs no
-confirmation flag. A yes-flag would be surface area on top of a mechanism that
-already does the job.
+Naming a subcommand already means vump never prompts, so the subcommand *is*
+the confirmation — the same reason `rm file` needs no confirmation flag.
 
 ### Configuration in YAML or JSON
 
 YAML's implicit typing is hazardous for a tool whose subject is exact version
-strings: `1.0` becomes a float and loses its trailing zero, and bare `yes`/`no`
-become booleans. JSON has no comments, which the generated configuration relies
-on. Supporting several formats would also make the same tool look different in
-every repository.
+strings: `1.0` becomes a float and loses its trailing zero. JSON has no
+comments, which the generated configuration relies on. Several formats would
+also make the same tool look different in every repository.
 
 ### Running the package manager to refresh a lock file
 
 vump writes a lock file's own version entry, which needs no network and no
-knowledge of the dependency graph. Running `npm install` or `cargo check` to
-do it instead would mean unbounded runtime, network access, and — for npm —
-executing arbitrary lifecycle scripts, all inside a tool whose job is editing a
-version string. It would also make "your build is broken" one of vump's failure
-modes, and require guessing which package manager a repository uses.
+knowledge of the dependency graph. Shelling out to `npm install` or `cargo
+check` instead would mean unbounded runtime, network access, arbitrary npm
+lifecycle scripts, and guessing which package manager a repository uses.
 
 The line: vump may write a value it already computed; it may never resolve
 dependencies.
 
+### Deriving the version from git tags instead of files
+
+Tools like MinVer compute the version from the nearest git tag, so no file
+records it. It needs git history at build time, which shallow CI checkouts and
+source tarballs lack; it leaves a checked-out tree with no readable version;
+and it does not reach npm or Cargo, whose manifests carry one regardless. Most
+of all it removes the second opinion — a mistyped tag becomes a correctly-built
+wrong version, the failure `vump check` exists to catch.
+
+`vump set "$(git describe --tags --abbrev=0)"` already covers that direction
+for anyone who wants it.
+
 ### A command to resume an interrupted bump
 
-Proposed when a bump could commit and tag before reporting that a lock file had
-gone stale, leaving a half-finished release to clean up by hand.
-
 The failure it would recover from no longer happens: everything knowable before
-writing is now checked before writing, so a run that cannot finish cleanly does
-nothing at all. A resume command would also need persisted state — which the
-design rejects for `--channel` on the same grounds — and would have to decide
-which files and which lines to commit, questions with no defensible answer.
-Running the fix leaves the tree dirty, which is itself refused.
-
-Where a repair is genuinely needed, `vump set <version>` writes every tracked
-file and requires no prior agreement between them. That is the resume command.
+writing is checked before writing, so a run that cannot finish cleanly does
+nothing at all. It would also need persisted state, rejected for `--channel` on
+the same grounds. `vump set <version>` is the repair.
 
 ### Tracking yarn.lock or pnpm-lock.yaml
 
 Neither records the project's own version, so a bump cannot make either stale.
-Checked against both tools rather than assumed: with `"version": "1.2.3"` in
-`package.json`, a generated `yarn.lock` and `pnpm-lock.yaml` each contain zero
-occurrences of it. Yarn Berry pins its own workspace entry at a placeholder for
-the same reason.
-
-They record a dependency graph, and a version bump does not change one. An
-earlier advisory named them anyway, which meant telling people to run an
-install that would change nothing.
+Measured rather than assumed: with `"version": "1.2.3"` in `package.json`, a
+generated `yarn.lock` and `pnpm-lock.yaml` contain zero occurrences of it.
 
 ### Reporting which `vump.toml` answered
 
-Built and shipped in 0.4.0: `status` printed the configuration in effect above
-the versions, named relative to the configuration above it. Removed in the next
-release.
+Shipped in 0.4.0, removed in 0.5.0. With the one supported layout it prints
+`vump.toml`, a line carrying nothing; it says something only when
+configurations are stacked, which is the arrangement `[[project]]` exists to
+prevent. Every frame for naming it was wrong somewhere — relative to the
+configuration above, three deep, it printed a fragment anchored to a file the
+reader cannot see.
 
-The case for it was that discovery searches upward, so a report that omits the
-file looks the same from everywhere. But one configuration is the only
-supported layout, and there it prints `vump.toml` — a line carrying nothing.
-The line only says something when configurations are stacked, which is the
-arrangement `[[project]]` exists to prevent, so the feature spent its whole
-budget on a layout the tool refuses.
-
-Naming it also needed a frame, and every frame was wrong somewhere. Relative to
-the working directory, a nested file and a repository's own both read
-`vump.toml`. Relative to the repository root, git decides a question that has
-nothing to do with git. Relative to the configuration above — what shipped —
-reads correctly with two configurations and misleads with three: from
-`mid/deep/inner/` the report said `deep/inner/vump.toml`, a fragment anchored to
-a file the reader cannot see. Anchoring at the outermost configuration instead
-would mean searching to the filesystem root to render one line.
-
-Only `status` printed it, so the same question went unanswered by `check`,
-whose verdict is the one that gets believed. Extending it to every command
-would have multiplied a cost already not worth paying once.
-
-What closes the case: the nesting refusal already names both files, in full,
-and it fires exactly when the answer matters. Worth reopening only if a CI log
-has to be read back to work out which project was verified — and the fix then
-is `check` naming its project, not any command naming its configuration.
+What closes it: the nesting refusal already names both files in full, and fires
+exactly when the answer matters.
 
 ### Announcing that a flag overrode configuration
 
-Proposed when flags became two-directional: if `vump.toml` says `through =
-"push"` and `--through tag` is passed, should the run say so?
+Output reports the effective plan, never where each decision came from. The
+flag is in the command the caller just typed, the result already names what
+happened, and `--dry-run` exists for asking in advance. A notice with no action
+attached fails the same test that governs error messages.
 
-No. Output reports the effective plan, never where each decision came from. The
-flag is in the command the caller just typed, the result already names the
-commit, the tag and the push outcome, and `--dry-run` exists for asking in
-advance. "Configuration was overridden" is a notice with no action attached to
-it, which is the same test that governs error messages.
+### Enforcing provenance verification, not just publishing it
 
-The guided run needs it least of all: it takes no git flags, so nothing there
-can be overridden.
+Releases carry a signed attestation and anyone can check it with `gh
+attestation verify`; the action and self-update enforce checksums instead.
+Portability, not doubt — checksums need only `curl` and a hash utility, while
+verifying an attestation needs a recent `gh` or a Rust Sigstore implementation,
+and those crates are immature. Revisit if that changes.
+
+### Per-identifier release branches
+
+Splitting branch policy per channel — `rc` from `release/*`, `beta` from
+`develop` — rather than once at stable versus pre-release. It triples the
+configuration surface for a policy rare even in GitFlow shops, and the existing
+split covers the three arrangements people actually hold. Reopen if someone
+names a repository needing the third axis.
+
+### Branch patterns in the release-branch lists
+
+Exact names cover `main`, `master` and `release`, which is what nearly every
+repository needs, and a pattern language is far easier to add than to narrow
+once written. semantic-release supports globs and regex in this position; the
+regex half is the part worth not copying.
+
+### Remembering an update channel
+
+`--channel` is per-invocation. Persisting it needs installation-level state — a
+config directory vump otherwise has no need for — which one setting does not
+justify.
+
+### Per-project commit messages
+
+`commit_message` accepts `{project}`, which distinguishes a monorepo's commits.
+Overriding the whole message per project, as `tag_pattern` allows, has no
+motivating case: tags must be unique, commit messages need not be.
 
 ### A saved plan-then-apply workflow
 
 Terraform's plan/apply exists because infrastructure changes are slow,
-expensive, and reviewed by someone other than their author, often in a
-different run. Bumping a version has none of those properties, and
-`--dry-run --json` already emits the plan a caller would want to inspect.
-
-Revisit only if a concrete workflow appears where a plan is reviewed
-asynchronously by someone who did not produce it.
+expensive, and reviewed by someone other than their author. Bumping a version
+is none of those, and `--dry-run --json` already emits the plan. Revisit if a
+plan is ever reviewed asynchronously by someone who did not produce it.

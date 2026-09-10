@@ -116,11 +116,14 @@ what the module is for and, where it matters, what it deliberately does not
 do — `app::set` opens by explaining why it has no notion of a version being
 moved *from*, which is the question every reader arrives with.
 
-Markdown files follow the same rules and one more: **they describe the tool,
-not the people building it.** No personal context, no workplace details, no
-residue of how a decision was reached beyond the reasoning itself. Voice is
-plain and declarative — state the rule, then the reason in a clause. These are
-read by humans as often as by machines.
+Markdown files follow the same rules and two more. **They describe the tool,
+not the people building it** — no personal context, no workplace details, no
+residue of how a decision was reached beyond the reasoning itself. And **a
+document earns its length**: record the constraint, the measurement, the option
+rejected; never the investigation that reached them. Prefer deleting a stale
+paragraph to appending a correct one, because a page nobody finishes protects
+nothing. Voice is plain and declarative — state the rule, then the reason in a
+clause. These are read by humans as often as by machines.
 
 ## 5. Tests
 

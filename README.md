@@ -68,6 +68,8 @@ needs, or it fails saying what is missing.
 | `--json` | Machine-readable output |
 | `--channel <c>` | `self` commands: least mature release to accept |
 | `--to <version>` | `self update`: install this exact version |
+| `--force` | `init`: overwrite an existing `vump.toml` |
+| `--limit <n>` | `self list`: show at most this many, newest first |
 
 ## Configuration
 

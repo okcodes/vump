@@ -942,6 +942,41 @@ mod tests {
         assert!(Cli::try_parse_from(["vump", "alpha", "--toward", "beta"]).is_err());
     }
 
+    /// Every long flag clap knows about, from the root and every subcommand.
+    fn every_long_flag(command: &clap::Command, into: &mut Vec<String>) {
+        for arg in command.get_arguments() {
+            if let Some(long) = arg.get_long() {
+                into.push(format!("--{long}"));
+            }
+        }
+        for sub in command.get_subcommands() {
+            every_long_flag(sub, into);
+        }
+    }
+
+    #[test]
+    fn the_documented_flag_tables_name_every_flag() {
+        // The tables are written by hand and drifted: `vump init --force`
+        // shipped, was referred to in prose, and appeared in neither table.
+        let mut flags = Vec::new();
+        every_long_flag(&Cli::command(), &mut flags);
+        flags.retain(|f| f != "--help" && f != "--version");
+        flags.sort_unstable();
+        flags.dedup();
+        assert!(!flags.is_empty(), "no flags found to check");
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        for doc in ["DESIGN.md", "README.md"] {
+            let text = std::fs::read_to_string(root.join(doc)).expect("document is readable");
+            for flag in &flags {
+                assert!(
+                    text.contains(&format!("`{flag}")),
+                    "{doc} never mentions {flag}",
+                );
+            }
+        }
+    }
+
     #[test]
     fn every_menu_label_is_a_command_that_parses() {
         // The menu's labels are the non-interactive equivalents, so a label
