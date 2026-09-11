@@ -1,6 +1,6 @@
 # vump website
 
-The landing page for [vump](https://github.com/okcodes/vump). One page, built
+The landing page for [vump](https://github.com/codehacks-io/vump). One page, built
 to static files and destined for GitHub Pages.
 
 ```bash

@@ -6,7 +6,7 @@ import { ArrowIcon } from '../ui/icons.tsx';
 import { Reveal } from '../ui/Reveal.tsx';
 import { Terminal } from '../ui/Terminal.tsx';
 
-const SOURCE = `git clone https://github.com/okcodes/vump
+const SOURCE = `git clone https://github.com/codehacks-io/vump
 cd vump && cargo install --path .`;
 
 export function Start() {

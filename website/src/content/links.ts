@@ -1,6 +1,6 @@
 import release from './release.json';
 
-const REPO = 'https://github.com/okcodes/vump';
+const REPO = 'https://github.com/codehacks-io/vump';
 
 /** The published vump release this build of the site describes. */
 export const VUMP_VERSION: string = release.version;

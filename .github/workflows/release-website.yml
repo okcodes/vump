@@ -36,8 +36,15 @@ jobs:
       # there is no regression a freshly built vump would catch that a
       # published one would not — and a Rust toolchain and a two-minute build
       # would otherwise be dragged into a job that deploys static files.
+      #
+      # Referenced by local path, not `owner/repo@ref`: this action lives in
+      # the same checkout the job already has, calling it by remote path would
+      # be this repository naming itself and its own default branch, and it
+      # would silently start pulling a stranger's code the day this repository
+      # name is ever freed and reused - the exact hazard a repository transfer
+      # (or a rename) is a reminder of.
       - name: Check tag matches the website version
-        uses: okcodes/vump/.github/actions/check@main
+        uses: ./.github/actions/check
         with:
           version: ${{ github.ref_name }}
 
